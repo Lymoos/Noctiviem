@@ -5,7 +5,7 @@ import Navbar from '../components/Navbar'
 import MediaCard from '../components/MediaCard'
 import RoomCard from '../components/RoomCard'
 import CreateRoomModal from '../components/CreateRoomModal'
-import { useStore, apiFetch, apiDelete } from '../store'
+import { useStore, apiFetch, apiDelete, apiPost } from '../store'
 import { translations } from '../i18n'
 import { socket, connectSocket } from '../socket'
 import { MediaItem, RoomState, User } from '../types'
@@ -73,6 +73,13 @@ export default function Dashboard() {
   const handleDeleteMedia = useCallback(async (id: string) => {
     await apiDelete(`/api/media/${id}`)
     // The 'media:updated' socket event will refresh the library
+  }, [])
+
+  const handleRedownloadMedia = useCallback(async (id: string) => {
+    const r = await apiPost(`/api/media/${id}/redownload`, {})
+    if (r.error) alert(r.error)
+    // 'media:updated' socket event will refresh the library;
+    // download progress appears in the Downloads panel
   }, [])
 
   const filtered = mediaLibrary.filter(m =>
@@ -170,6 +177,7 @@ export default function Dashboard() {
                   onWatch={() => handleOpenCreate(item.id)}
                   onCreateRoom={() => handleOpenCreate(item.id)}
                   onDelete={() => handleDeleteMedia(item.id)}
+                  onRedownload={() => handleRedownloadMedia(item.id)}
                 />
               ))}
             </div>

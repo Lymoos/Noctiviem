@@ -163,16 +163,23 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
-  // Apply browser-native audio track switching when selectedAudio changes
-  useEffect(() => {
+  // Apply audio track selection via the native audioTracks API (Chrome/Safari).
+  // Must be called both after metadata loads (tracks become available) and
+  // whenever the selected index changes. Without the metadata call, all tracks
+  // start enabled simultaneously and the effect runs before tracks are ready.
+  const applyAudioTrack = useCallback((index: number) => {
     const video = videoRef.current
     if (!video) return
     const tracks = (video as any).audioTracks
     if (!tracks || tracks.length === 0) return
     for (let i = 0; i < tracks.length; i++) {
-      tracks[i].enabled = (i === selectedAudio)
+      tracks[i].enabled = (i === index)
     }
-  }, [selectedAudio])
+  }, [])
+
+  useEffect(() => {
+    applyAudioTrack(selectedAudio)
+  }, [selectedAudio, applyAudioTrack])
 
   return (
     <div
@@ -200,6 +207,9 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           if (serverTime > 0 && videoRef.current) {
             videoRef.current.currentTime = serverTime
           }
+          // Initialize audio tracks — disable all except the selected one.
+          // Without this, Chrome plays all tracks at once when multiple exist.
+          applyAudioTrack(selectedAudio)
         }}
         onClick={handlePlayPause}
       />

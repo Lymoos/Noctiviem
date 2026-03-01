@@ -318,6 +318,50 @@ app.delete('/api/media/:id', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
+/**
+ * Trigger a full re-download of a media item:
+ * deletes the video file, removes the media entry, removes the old download
+ * entry, and re-queues the torrent so WebTorrent fetches fresh files.
+ * The new remux will preserve all audio tracks and transcode to AAC.
+ */
+app.post('/api/media/:id/redownload', requireAuth, async (req, res) => {
+  const mediaId = req.params.id;
+  const idx = mediaLibrary.findIndex(m => m.id === mediaId);
+  if (idx === -1) { res.status(404).json({ error: 'Media not found' }); return; }
+  const item = mediaLibrary[idx];
+
+  // Find the associated download
+  const download = dl.list().find(d => d.mediaIds.includes(mediaId));
+  if (!download) { res.status(404).json({ error: 'No download associated with this media item' }); return; }
+  if (!fs.existsSync(download.torrentPath)) {
+    res.status(409).json({ error: 'Original .torrent file is missing — re-upload the torrent manually' });
+    return;
+  }
+
+  // Delete the video file on disk
+  if (item.videoUrl.startsWith('/media/')) {
+    const rel = item.videoUrl.slice('/media/'.length).split('/').map(decodeURIComponent).join('/');
+    const filePath = path.join(dl.DOWNLOADS_DIR, rel);
+    if (fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch (e: any) {
+        console.warn('[redownload] could not delete file:', e.message);
+      }
+    }
+  }
+
+  // Remove media item from library + DB
+  mediaLibrary.splice(idx, 1);
+  await db.mediaItem.delete({ where: { id: mediaId } }).catch(() => {});
+
+  // Remove old download entry, re-queue the same torrent
+  const { torrentPath, name } = download;
+  await dl.remove(download.id);
+  const newDownload = await dl.add(torrentPath, name);
+
+  io.emit('media:updated', mediaLibrary);
+  res.json({ success: true, downloadId: newDownload.id });
+});
+
 // ── Download routes ───────────────────────────────────────────────────────────
 app.get('/api/downloads', requireAuth, (_req, res) => { res.json(dl.list()); });
 

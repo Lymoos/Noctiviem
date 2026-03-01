@@ -1,4 +1,4 @@
-import { Play, Clapperboard, Headphones, Subtitles, Wifi, Clock, X } from 'lucide-react'
+import { Play, Clapperboard, Headphones, Subtitles, Wifi, Clock, X, RefreshCw } from 'lucide-react'
 import { MediaItem } from '../types'
 import { useStore } from '../store'
 import { translations } from '../i18n'
@@ -9,6 +9,7 @@ interface MediaCardProps {
   onCreateRoom?: () => void
   onManage?: () => void
   onDelete?: () => void
+  onRedownload?: () => void
 }
 
 function formatDuration(seconds: number): string {
@@ -18,7 +19,7 @@ function formatDuration(seconds: number): string {
   return `${m}m`
 }
 
-export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDelete }: MediaCardProps) {
+export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDelete, onRedownload }: MediaCardProps) {
   const { lang } = useStore()
   const t = translations[lang]
   const isReady = item.status === 'ready'
@@ -61,6 +62,17 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDel
           {item.status === 'processing' && <span className="badge-processing">{t.processingBadge}</span>}
           {item.status === 'error' && <span className="badge-error">{t.error}</span>}
         </div>
+
+        {/* Re-download button */}
+        {onRedownload && (
+          <button
+            onClick={e => { e.stopPropagation(); onRedownload() }}
+            className="absolute top-2 right-9 w-6 h-6 rounded-full bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-blue-600/90 z-10"
+            title="Re-download (recover all audio tracks)"
+          >
+            <RefreshCw size={11} className="text-white" />
+          </button>
+        )}
 
         {/* Delete button */}
         {onDelete && (
