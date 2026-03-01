@@ -6,7 +6,63 @@ import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import db from './db';
+
+const execFileAsync = promisify(execFile);
+
+/** Run ffprobe on a video file and extract duration, audio streams, subtitle streams. */
+async function probeVideoFile(filePath: string): Promise<{
+  duration: number;
+  audio: { id: number; label: string; lang: string }[];
+  subtitles: { id: string; label: string; lang: string }[];
+}> {
+  const fallback = {
+    duration: 0,
+    audio: [{ id: 0, label: 'Track 1', lang: 'und' }],
+    subtitles: [{ id: 'off', label: 'Off', lang: 'off' }],
+  };
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_streams',
+      '-show_format',
+      filePath,
+    ], { timeout: 30000 });
+
+    const data = JSON.parse(stdout);
+    const streams: any[] = data.streams ?? [];
+    const duration = parseFloat(data.format?.duration ?? '0') || 0;
+
+    const audioStreams = streams.filter(s => s.codec_type === 'audio');
+    const subStreams   = streams.filter(s => s.codec_type === 'subtitle');
+
+    const audio = audioStreams.length > 0
+      ? audioStreams.map((s, i) => {
+          const lang  = s.tags?.language ?? 'und';
+          const title = s.tags?.title;
+          const label = title ?? (lang !== 'und' ? `${lang.toUpperCase()} — ${s.codec_name ?? 'audio'}` : `Track ${i + 1}`);
+          return { id: i, label, lang };
+        })
+      : fallback.audio;
+
+    const subtitles: { id: string; label: string; lang: string }[] = [
+      { id: 'off', label: 'Off', lang: 'off' },
+      ...subStreams.map((s, i) => {
+        const lang  = s.tags?.language ?? 'und';
+        const title = s.tags?.title;
+        const label = title ?? (lang !== 'und' ? lang.toUpperCase() : `Sub ${i + 1}`);
+        return { id: `sub_${i}`, label, lang };
+      }),
+    ];
+
+    return { duration, audio, subtitles };
+  } catch {
+    return fallback;
+  }
+}
 import * as rm from './roomManager';
 import * as auth from './auth';
 import * as dl from './downloads';
@@ -56,17 +112,22 @@ dl.setOnCompleted(async (item) => {
   for (const f of item.files.filter(f => f.isVideo)) {
     const title = f.name.replace(/\.[^.]+$/, '');
     if (mediaLibrary.find(m => m.title === title)) continue;
+
+    // Probe for real duration, audio tracks and subtitle tracks
+    const filePath = path.join(dl.DOWNLOADS_DIR, item.name, f.name);
+    const { duration, audio, subtitles } = await probeVideoFile(filePath);
+
     const mediaItem: MediaItem = {
       id: uuidv4(),
       title,
       poster: `https://picsum.photos/seed/${item.id}/400/600`,
       thumbnail: `https://picsum.photos/seed/${item.id}/800/450`,
-      duration: 0,
+      duration,
       year: new Date().getFullYear(),
       genre: 'Downloaded',
       description: `Downloaded via torrent: ${item.name}`,
-      audio: [{ id: 0, label: 'Track 1', lang: 'und' }],
-      subtitles: [{ id: 'off', label: 'Off', lang: 'off' }],
+      audio,
+      subtitles,
       qualities: ['Auto'],
       status: 'ready',
       videoUrl: `/media/${encodeURIComponent(item.name)}/${encodeURIComponent(f.name)}`,

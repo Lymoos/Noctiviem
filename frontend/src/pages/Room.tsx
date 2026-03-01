@@ -258,7 +258,7 @@ export default function Room() {
   const timer = new Date(currentVideoTime * 1000).toISOString().slice(11, 19)
 
   return (
-    <div className="min-h-screen bg-cinema-bg flex flex-col" style={{ maxHeight: '100vh', overflow: 'hidden' }}>
+    <div className="h-screen bg-cinema-bg flex flex-col overflow-hidden">
       {/* ── TOP BAR ──────────────────────────────────────────────────────────── */}
       <header className="glass-strong px-4 py-2.5 flex items-center gap-3 flex-shrink-0 z-30">
         <button onClick={handleLeave} className="btn-ghost p-2">
@@ -345,9 +345,9 @@ export default function Room() {
       {/* ── MAIN AREA ────────────────────────────────────────────────────────── */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left: Video + Hall */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-          {/* Video */}
-          <div className="p-3 pb-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+          {/* Video — shrinks to fit available height */}
+          <div className="p-3 pb-0 flex-shrink-0">
             {/* Ambient glow backdrop */}
             <div className="relative">
               <div className="absolute -inset-4 rounded-2xl blur-2xl opacity-30 pointer-events-none"
@@ -362,8 +362,8 @@ export default function Room() {
             </div>
           </div>
 
-          {/* Cinema Hall */}
-          <div className="p-3">
+          {/* Cinema Hall — takes remaining space, scrolls internally if packed */}
+          <div className="p-3 flex-1 overflow-y-auto min-h-0">
             <CinemaHall
               participants={room.participants}
               leaderId={room.leaderId}

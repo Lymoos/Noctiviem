@@ -163,10 +163,22 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
+  // Apply browser-native audio track switching when selectedAudio changes
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const tracks = (video as any).audioTracks
+    if (!tracks || tracks.length === 0) return
+    for (let i = 0; i < tracks.length; i++) {
+      tracks[i].enabled = (i === selectedAudio)
+    }
+  }, [selectedAudio])
+
   return (
     <div
       ref={containerRef}
       className="relative bg-black rounded-xl overflow-hidden screen-glow vignette group"
+      style={{ maxHeight: 'calc(100vh - 150px)' }}
       onMouseMove={showControls}
       onMouseLeave={() => isPlaying && setControlsVisible(false)}
     >
@@ -175,6 +187,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
         ref={videoRef}
         src={media.videoUrl}
         className="w-full aspect-video"
+        style={{ maxHeight: 'calc(100vh - 150px)', objectFit: 'contain', cursor: isLeader ? 'pointer' : 'default' }}
         playsInline
         preload="metadata"
         onTimeUpdate={() => {
@@ -189,7 +202,6 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           }
         }}
         onClick={handlePlayPause}
-        style={{ cursor: isLeader ? 'pointer' : 'default' }}
       />
 
       {/* Sync indicator */}

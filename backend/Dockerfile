@@ -21,7 +21,7 @@ FROM node:20-slim
 WORKDIR /app
 
 # Prisma requires OpenSSL at runtime (not present in slim image)
-RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y openssl ffmpeg && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled JS and workspace node_modules (includes Prisma client)
 COPY --from=builder /app/node_modules ./node_modules
