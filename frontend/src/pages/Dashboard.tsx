@@ -1,27 +1,24 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Library, Download, Clapperboard, Plug, RefreshCw, Plus, Film, Users, Zap } from 'lucide-react'
+import { Library, Download, Clapperboard, Plug, Plus, Film, Users, Zap } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import MediaCard from '../components/MediaCard'
 import RoomCard from '../components/RoomCard'
 import CreateRoomModal from '../components/CreateRoomModal'
 import { useStore } from '../store'
-import { socket, connectSocket, getLocalUserId } from '../socket'
-import { MediaItem, RoomState } from '../types'
-
-const DEMO_ROOMS = [
-  { id: 'demo1', name: 'Friday Night 🎬', mediaTitle: 'Big Buck Bunny', mediaPoster: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/400px-Big_buck_bunny_poster_big.jpg', participantCount: 7, maxParticipants: 20, isPlaying: true, isLocked: false },
-  { id: 'demo2', name: 'Sci-Fi Night', mediaTitle: 'Tears of Steel', mediaPoster: 'https://picsum.photos/seed/tearsofsteel/400/600', participantCount: 3, maxParticipants: 10, isPlaying: false, isLocked: false },
-]
+import { socket, connectSocket } from '../socket'
+import { MediaItem, RoomState, User } from '../types'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { setMediaLibrary, mediaLibrary, setRoom, setCurrentUser } = useStore()
+  const { setMediaLibrary, mediaLibrary, setRoom, setCurrentUser, nickname } = useStore()
   const [loading, setLoading] = useState(true)
+  const [createError, setCreateError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [preselectedMedia, setPreselectedMedia] = useState<string | undefined>()
   const [connectSourceOpen, setConnectSourceOpen] = useState(false)
+  const [myRooms, setMyRooms] = useState<{ id: string; name: string; mediaTitle: string; mediaPoster: string; participantCount: number; maxParticipants: number; isPlaying: boolean; isLocked: boolean; isLeader: boolean }[]>([])
 
   // Fetch media library
   useEffect(() => {
@@ -41,13 +38,26 @@ export default function Dashboard() {
 
   const handleCreateRoom = useCallback((data: { name: string; mediaId: string; maxParticipants: number }) => {
     setCreateModalOpen(false)
-    socket.emit('room:create', data, (res: { room: RoomState; media: MediaItem; userId: string; error?: string }) => {
-      if (res.error) { alert(res.error); return }
-      setRoom(res.room, res.media)
-      const me = res.room.participants.find(p => p.id === res.userId)
-      if (me) setCurrentUser(me)
-      navigate(`/room/${res.room.id}`)
-    })
+    setCreateError(null)
+
+    const emit = () => {
+      socket.emit('room:create', data, (res: { room: RoomState; media: MediaItem; userId: string; error?: string }) => {
+        if (res.error) {
+          setCreateError(res.error)
+          return
+        }
+        setRoom(res.room, res.media)
+        const me = res.room.participants.find((p: User) => p.id === res.userId)
+        if (me) setCurrentUser(me)
+        navigate(`/room/${res.room.id}`)
+      })
+    }
+
+    if (socket.connected) {
+      emit()
+    } else {
+      socket.once('connect', emit)
+    }
   }, [navigate, setRoom, setCurrentUser])
 
   const handleOpenCreate = (mediaId?: string) => {
@@ -72,6 +82,17 @@ export default function Dashboard() {
         onSearchChange={setSearchQuery}
       />
 
+      {/* Create error banner */}
+      {createError && (
+        <div className="mx-6 mt-4 flex items-center justify-between glass rounded-xl px-4 py-3 border border-red-500/20">
+          <div className="flex items-center gap-2 text-sm text-red-400">
+            <span>⚠</span>
+            <span>{createError}</span>
+          </div>
+          <button onClick={() => setCreateError(null)} className="text-slate-500 hover:text-white text-xs">✕</button>
+        </div>
+      )}
+
       {/* Hero section */}
       <div className="relative px-6 pt-10 pb-8 overflow-hidden">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -81,11 +102,10 @@ export default function Dashboard() {
         <div className="relative">
           <h1 className="text-3xl font-bold text-cinema-text">
             Welcome back,{' '}
-            <span className="accent-gradient-text">{useStore.getState().nickname}</span>
+            <span className="accent-gradient-text">{nickname}</span>
           </h1>
           <p className="text-cinema-muted mt-1.5">Ready to start a screening?</p>
 
-          {/* Quick stats */}
           <div className="flex items-center gap-6 mt-5">
             <div className="flex items-center gap-2 text-sm text-slate-500">
               <Film size={14} className="text-purple-400" />
@@ -93,7 +113,7 @@ export default function Dashboard() {
             </div>
             <div className="flex items-center gap-2 text-sm text-slate-500">
               <Clapperboard size={14} className="text-blue-400" />
-              <span>{DEMO_ROOMS.length} active halls</span>
+              <span>{myRooms.length} active halls</span>
             </div>
             <div className="flex items-center gap-2 text-sm text-slate-500">
               <Zap size={14} className="text-green-400" />
@@ -178,15 +198,16 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {DEMO_ROOMS.length === 0 ? (
+          {myRooms.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <div className="w-14 h-14 rounded-2xl bg-cinema-card flex items-center justify-center mb-3 opacity-30">
                 <Users size={24} className="text-slate-500" />
               </div>
               <p className="text-cinema-muted text-sm">No active halls</p>
+              <p className="text-xs text-slate-600 mt-1 mb-4">Create a hall and invite your friends</p>
               <button
                 onClick={() => handleOpenCreate()}
-                className="btn-primary mt-4 text-sm flex items-center gap-2"
+                className="btn-primary text-sm flex items-center gap-2"
               >
                 <Plus size={13} />
                 Create a Hall
@@ -194,7 +215,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {DEMO_ROOMS.map(room => (
+              {myRooms.map(room => (
                 <RoomCard key={room.id} {...room} />
               ))}
             </div>

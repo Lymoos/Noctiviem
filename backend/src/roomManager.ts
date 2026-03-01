@@ -3,6 +3,8 @@ import { RoomState, User, Message, Reaction } from './types';
 
 const rooms = new Map<string, RoomState>();
 const inviteCodeToRoomId = new Map<string, string>();
+// Grace period timers: don't delete empty rooms immediately, give 60s to reconnect
+const deletionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function generateInviteCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -80,14 +82,22 @@ export function joinRoom(
 ): { room: RoomState; user: User } | { error: string } {
   const room = rooms.get(roomId);
   if (!room) return { error: 'Room not found' };
-  if (room.isLocked) return { error: 'Room is locked by the Leader' };
-  if (room.participants.length >= room.maxParticipants) return { error: 'Room is full' };
+
+  // Cancel any pending deletion since someone is joining
+  if (deletionTimers.has(roomId)) {
+    clearTimeout(deletionTimers.get(roomId)!);
+    deletionTimers.delete(roomId);
+  }
 
   const existing = room.participants.find(p => p.id === userId);
   if (existing) {
+    // Reconnecting user — just update their socketId, bypass lock/full checks
     existing.socketId = socketId;
     return { room, user: existing };
   }
+
+  if (room.isLocked) return { error: 'Room is locked by the Leader' };
+  if (room.participants.length >= room.maxParticipants) return { error: 'Room is full' };
 
   const occupiedSeats = new Set(room.participants.map(p => p.seatNumber));
   let seatNumber = 1;
@@ -115,9 +125,17 @@ export function leaveRoom(roomId: string, userId: string): RoomState | undefined
   room.updatedAt = Date.now();
 
   if (room.participants.length === 0) {
-    rooms.delete(room.id);
-    inviteCodeToRoomId.delete(room.inviteCode);
-    return undefined;
+    // Don't delete immediately — give 60s grace period for reconnects
+    if (!deletionTimers.has(room.id)) {
+      const timer = setTimeout(() => {
+        rooms.delete(room.id);
+        inviteCodeToRoomId.delete(room.inviteCode);
+        deletionTimers.delete(room.id);
+        console.log(`[room] ${room.id} expired after grace period`);
+      }, 60_000);
+      deletionTimers.set(room.id, timer);
+    }
+    return room; // return room (empty) so callers can broadcast leave
   }
 
   if (userId === room.leaderId && room.participants.length > 0) {

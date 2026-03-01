@@ -28,8 +28,8 @@ export default function Room() {
   const isLeader = useStore(selectIsLeader)
   const userId = getLocalUserId()
 
-  const [synced, setSynced] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
+  const [joinError, setJoinError] = useState<string | null>(null)
   const [kicked, setKicked] = useState(false)
   const [copied, setCopied] = useState(false)
   const [activeBubbles, setActiveBubbles] = useState<{ [userId: string]: string }>({})
@@ -43,19 +43,34 @@ export default function Room() {
 
     const join = () => {
       if (!roomId) return
+
+      // If store already has this room (e.g. we just created it), use that data
+      // but still call room:join to re-establish server-side socket membership
+      const storeRoom = useStore.getState().room
+      const storeMedia = useStore.getState().media
+      const storeUser = useStore.getState().currentUser
+
       socket.emit('room:join', { roomId }, (res: {
         room: RoomState; user: User; media: MediaItem; userId: string; error?: string
       }) => {
         if (res.error) {
-          alert(res.error)
-          navigate('/')
+          // If we have local room data (just created), stay in the room
+          if (storeRoom?.id === roomId && storeUser) {
+            setConnectionStatus('connected')
+            return
+          }
+          setJoinError(res.error)
           return
         }
         setRoom(res.room, res.media)
         setCurrentUser(res.user)
-        setSynced(true)
         setConnectionStatus('connected')
       })
+
+      // If store already has room data, consider it connected while waiting for server response
+      if (storeRoom?.id === roomId && storeUser && storeMedia) {
+        setConnectionStatus('connected')
+      }
     }
 
     if (socket.connected) {
@@ -65,7 +80,7 @@ export default function Room() {
     }
 
     return () => { socket.off('connect', join) }
-  }, [roomId, navigate, setRoom, setCurrentUser])
+  }, [roomId, setRoom, setCurrentUser])
 
   // Socket event handlers
   useEffect(() => {
@@ -205,6 +220,22 @@ export default function Room() {
           <h1 className="text-2xl font-bold text-cinema-text mb-2">You've been removed</h1>
           <p className="text-cinema-muted">The Leader removed you from the hall.</p>
           <button onClick={() => navigate('/')} className="btn-primary mt-6">
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Join error screen ──────────────────────────────────────────────────────
+  if (joinError) {
+    return (
+      <div className="min-h-screen bg-cinema-bg flex items-center justify-center p-4">
+        <div className="text-center max-w-sm">
+          <div className="text-5xl mb-4">🎬</div>
+          <h1 className="text-xl font-bold text-cinema-text mb-2">Cannot enter hall</h1>
+          <p className="text-cinema-muted text-sm mb-6">{joinError}</p>
+          <button onClick={() => navigate('/')} className="btn-primary">
             Back to Dashboard
           </button>
         </div>
