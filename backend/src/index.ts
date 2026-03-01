@@ -134,9 +134,13 @@ dl.setOnCompleted(async (item) => {
     const title = f.name.replace(/\.[^.]+$/, '');
     if (mediaLibrary.find(m => m.title === title)) continue;
 
-    // f.path is the real relative path from DOWNLOADS_DIR (e.g. "Movie.mkv" for
-    // single-file torrents, "TorrentName/Movie.mkv" for multi-file torrents)
+    // f.path from WebTorrent is relative to DOWNLOADS_DIR, but for single-file
+    // torrents it may be "TorrentName/file.mkv" while the file is actually flat.
     let filePath = path.join(dl.DOWNLOADS_DIR, f.path);
+    if (!fs.existsSync(filePath)) {
+      const flat = path.join(dl.DOWNLOADS_DIR, f.name);
+      if (fs.existsSync(flat)) filePath = flat;
+    }
 
     // Browsers can't play MKV/AVI/etc — remux to MP4 (stream copy, fast, lossless)
     try {
@@ -416,6 +420,58 @@ io.on('connection', socket => {
   }
 });
 
+/**
+ * On startup: fix any media items whose videoUrl points to a missing or
+ * non-browser-playable file.  Handles two cases:
+ *  1. Path is doubled (WebTorrent single-file quirk): try basename instead.
+ *  2. File is MKV/AVI/etc: remux to MP4 and update the stored URL.
+ */
+async function repairMediaLibrary() {
+  for (const item of mediaLibrary) {
+    if (!item.videoUrl.startsWith('/media/')) continue;
+
+    const relPath = item.videoUrl.slice('/media/'.length).split('/').map(decodeURIComponent).join('/');
+    let filePath = path.join(dl.DOWNLOADS_DIR, relPath);
+    let changed = false;
+
+    if (!fs.existsSync(filePath)) {
+      const flat = path.join(dl.DOWNLOADS_DIR, path.basename(relPath));
+      if (fs.existsSync(flat)) {
+        filePath = flat;
+        changed = true;
+      } else {
+        console.warn(`[repair] file missing for "${item.title}": ${filePath}`);
+        continue;
+      }
+    }
+
+    try {
+      const mp4 = await remuxToMp4(filePath);
+      if (mp4 !== filePath) { filePath = mp4; changed = true; }
+    } catch (e: any) {
+      console.error(`[repair] remux failed for "${item.title}":`, e.message);
+    }
+
+    if (!changed) continue;
+
+    const newRel = path.relative(dl.DOWNLOADS_DIR, filePath);
+    const newUrl = '/media/' + newRel.split('/').map(encodeURIComponent).join('/');
+    const { duration, audio, subtitles } = await probeVideoFile(filePath);
+
+    item.videoUrl = newUrl;
+    item.duration = duration;
+    item.audio = audio;
+    item.subtitles = subtitles;
+
+    await db.mediaItem.update({
+      where: { id: item.id },
+      data: { videoUrl: newUrl, duration, audio: audio as any, subtitles: subtitles as any },
+    }).catch((e: Error) => console.error('[repair] DB update failed:', e.message));
+
+    console.log(`[repair] fixed "${item.title}" → ${newUrl}`);
+  }
+}
+
 // ── Startup (async to wait for DB) ────────────────────────────────────────────
 async function main() {
   // Load downloads from DB (resumes queued, marks interrupted as error)
@@ -425,6 +481,9 @@ async function main() {
   const dbMedia = await db.mediaItem.findMany({ orderBy: { createdAt: 'desc' } });
   mediaLibrary.push(...dbMedia.map(dbRowToMediaItem));
   console.log(`[db] ${dbMedia.length} media items, ${dl.list().length} downloads loaded`);
+
+  // Fix broken paths / remux legacy MKV items
+  await repairMediaLibrary();
 
   const PORT = process.env.PORT || 3001;
   httpServer.listen(PORT, () => console.log(`🎬 Noctiviem backend → http://localhost:${PORT}`));
