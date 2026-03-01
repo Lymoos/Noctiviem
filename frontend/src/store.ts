@@ -1,10 +1,18 @@
 import { create } from 'zustand';
 import { RoomState, User, Message, Reaction, MediaItem, Account, DownloadItem } from './types';
+import { Lang } from './i18n';
 
 // ── Token helpers ────────────────────────────────────────────────────────────
 const TOKEN_KEY = 'noctiviem_token';
 const USERID_KEY = 'noctiviem_userId';
 const NICK_KEY = 'noctiviem_nickname';
+const LANG_KEY = 'noctiviem_lang';
+
+function detectLang(): Lang {
+  const stored = localStorage.getItem(LANG_KEY) as Lang | null;
+  if (stored === 'ru' || stored === 'en') return stored;
+  return navigator.language.startsWith('ru') ? 'ru' : 'en';
+}
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
@@ -46,7 +54,6 @@ export async function apiDelete(url: string) {
 
 // ── Store interface ──────────────────────────────────────────────────────────
 interface AppStore {
-  // Auth
   account: Account | null;
   isAuthenticated: boolean;
   userId: string;
@@ -56,17 +63,18 @@ interface AppStore {
   logout: () => void;
   setNickname: (n: string) => void;
 
-  // Media
+  lang: Lang;
+  setLang: (l: Lang) => void;
+  toggleLang: () => void;
+
   mediaLibrary: MediaItem[];
   setMediaLibrary: (items: MediaItem[]) => void;
 
-  // Downloads
   downloads: DownloadItem[];
   setDownloads: (items: DownloadItem[]) => void;
   downloadsOpen: boolean;
   toggleDownloads: () => void;
 
-  // Room
   room: RoomState | null;
   media: MediaItem | null;
   currentUser: User | null;
@@ -82,7 +90,6 @@ interface AppStore {
   addReaction: (reaction: Reaction) => void;
   clearRoom: () => void;
 
-  // UI
   chatOpen: boolean;
   toggleChat: () => void;
   leaderPanelOpen: boolean;
@@ -90,7 +97,6 @@ interface AppStore {
 }
 
 export const useStore = create<AppStore>((set) => ({
-  // Auth
   account: null,
   isAuthenticated: !!getToken(),
   userId: storedUserId,
@@ -117,17 +123,25 @@ export const useStore = create<AppStore>((set) => ({
     set({ nickname: n });
   },
 
-  // Media
+  lang: detectLang(),
+  setLang: (l) => {
+    localStorage.setItem(LANG_KEY, l);
+    set({ lang: l });
+  },
+  toggleLang: () => set(s => {
+    const next: Lang = s.lang === 'ru' ? 'en' : 'ru';
+    localStorage.setItem(LANG_KEY, next);
+    return { lang: next };
+  }),
+
   mediaLibrary: [],
   setMediaLibrary: (items) => set({ mediaLibrary: items }),
 
-  // Downloads
   downloads: [],
   setDownloads: (items) => set({ downloads: items }),
   downloadsOpen: false,
   toggleDownloads: () => set(s => ({ downloadsOpen: !s.downloadsOpen })),
 
-  // Room
   room: null,
   media: null,
   currentUser: null,

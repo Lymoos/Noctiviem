@@ -2,11 +2,13 @@ import { useState, FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Film, Eye, EyeOff } from 'lucide-react'
 import { useStore, apiPost } from '../store'
+import { translations } from '../i18n'
 import { Account } from '../types'
 
 export default function Register() {
   const navigate = useNavigate()
-  const { setAccount } = useStore()
+  const { setAccount, lang } = useStore()
+  const t = translations[lang]
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -41,8 +43,8 @@ export default function Register() {
         </div>
 
         <div className="glass-strong rounded-2xl p-8" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
-          <h1 className="text-xl font-bold text-cinema-text mb-1">Create account</h1>
-          <p className="text-sm text-cinema-muted mb-6">Join the private cinema</p>
+          <h1 className="text-xl font-bold text-cinema-text mb-1">{t.createAccount}</h1>
+          <p className="text-sm text-cinema-muted mb-6">{t.joinCinema}</p>
 
           {error && (
             <div className="mb-4 flex items-center gap-2 text-sm text-red-400 bg-red-900/15 border border-red-500/20 rounded-lg px-3 py-2.5">
@@ -52,22 +54,22 @@ export default function Register() {
 
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-1.5">Username</label>
+              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-1.5">{t.username}</label>
               <input type="text" value={username} onChange={e => setUsername(e.target.value)}
                 className="input-field" placeholder="yourname" required minLength={2} maxLength={32} autoFocus />
             </div>
 
             <div>
-              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-1.5">Email</label>
+              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-1.5">{t.email}</label>
               <input type="email" value={email} onChange={e => setEmail(e.target.value)}
                 className="input-field" placeholder="you@example.com" required />
             </div>
 
             <div>
-              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-1.5">Password</label>
+              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-1.5">{t.password}</label>
               <div className="relative">
                 <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
-                  className="input-field pr-10" placeholder="Min 6 characters" required minLength={6} />
+                  className="input-field pr-10" placeholder={t.minChars} required minLength={6} />
                 <button type="button" onClick={() => setShowPw(!showPw)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
                   {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -79,15 +81,15 @@ export default function Register() {
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
                   <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Creating account…
+                  {t.creatingAccount}
                 </span>
-              ) : 'Create account'}
+              ) : t.createAccount}
             </button>
           </form>
 
           <p className="text-center text-sm text-cinema-muted mt-5">
-            Already have an account?{' '}
-            <Link to="/login" className="text-purple-400 hover:text-purple-300 transition-colors">Sign in</Link>
+            {t.haveAccount}{' '}
+            <Link to="/login" className="text-purple-400 hover:text-purple-300 transition-colors">{t.signIn}</Link>
           </p>
         </div>
       </div>

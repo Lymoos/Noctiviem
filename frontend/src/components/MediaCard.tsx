@@ -1,11 +1,14 @@
-import { Play, Clapperboard, Settings, Headphones, Subtitles, Wifi, Clock } from 'lucide-react'
+import { Play, Clapperboard, Headphones, Subtitles, Wifi, Clock, X } from 'lucide-react'
 import { MediaItem } from '../types'
+import { useStore } from '../store'
+import { translations } from '../i18n'
 
 interface MediaCardProps {
   item: MediaItem
   onWatch?: () => void
   onCreateRoom?: () => void
   onManage?: () => void
+  onDelete?: () => void
 }
 
 function formatDuration(seconds: number): string {
@@ -15,7 +18,9 @@ function formatDuration(seconds: number): string {
   return `${m}m`
 }
 
-export default function MediaCard({ item, onWatch, onCreateRoom, onManage }: MediaCardProps) {
+export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDelete }: MediaCardProps) {
+  const { lang } = useStore()
+  const t = translations[lang]
   const isReady = item.status === 'ready'
 
   return (
@@ -36,14 +41,14 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage }: Med
         {item.status === 'processing' && (
           <div className="absolute inset-0 bg-cinema-bg/70 flex flex-col items-center justify-center gap-2">
             <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-            <span className="text-xs text-slate-400">Processing…</span>
+            <span className="text-xs text-slate-400">{t.processingDots}</span>
           </div>
         )}
 
         {/* Error overlay */}
         {item.status === 'error' && (
           <div className="absolute inset-0 bg-cinema-bg/70 flex items-center justify-center">
-            <span className="text-xs text-red-400">Error</span>
+            <span className="text-xs text-red-400">{t.error}</span>
           </div>
         )}
 
@@ -52,10 +57,21 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage }: Med
 
         {/* Status badge */}
         <div className="absolute top-2 left-2">
-          {item.status === 'ready' && <span className="badge-ready">Ready</span>}
-          {item.status === 'processing' && <span className="badge-processing">Processing</span>}
-          {item.status === 'error' && <span className="badge-error">Error</span>}
+          {item.status === 'ready' && <span className="badge-ready">{t.ready}</span>}
+          {item.status === 'processing' && <span className="badge-processing">{t.processingBadge}</span>}
+          {item.status === 'error' && <span className="badge-error">{t.error}</span>}
         </div>
+
+        {/* Delete button */}
+        {onDelete && (
+          <button
+            onClick={e => { e.stopPropagation(); onDelete() }}
+            className="absolute top-2 right-2 w-6 h-6 rounded-full bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600/90 z-10"
+            title={t.deleteMedia}
+          >
+            <X size={11} className="text-white" />
+          </button>
+        )}
 
         {/* Actions */}
         {isReady && (
@@ -66,14 +82,14 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage }: Med
                 className="flex items-center gap-2 text-xs font-medium text-white bg-white/10 hover:bg-white/20 rounded-lg px-3 py-2 transition-colors w-full"
               >
                 <Play size={12} fill="currentColor" />
-                Watch
+                {t.watch}
               </button>
               <button
                 onClick={e => { e.stopPropagation(); onCreateRoom?.() }}
                 className="flex items-center gap-2 text-xs font-medium text-white bg-purple-600/80 hover:bg-purple-600 rounded-lg px-3 py-2 transition-colors w-full"
               >
                 <Clapperboard size={12} />
-                Create Hall
+                {t.createHall}
               </button>
             </div>
           </div>

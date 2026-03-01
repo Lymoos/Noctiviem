@@ -376,29 +376,30 @@ body::before {
   animation: fade-in 0.2s ease-out;
 }
 
-/* ─── Input ─────────────────────────────────────────────────────────────────── */
-.input-field {
-  width: 100%;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 8px;
-  /* Use separate properties so Tailwind pl-* utilities can override padding-left */
-  padding-top: 10px;
-  padding-right: 14px;
-  padding-bottom: 10px;
-  padding-left: 14px;
-  color: #e2e8f0;
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
+/* ─── Input (in @layer components so Tailwind utilities like pl-9 can override) ── */
+@layer components {
+  .input-field {
+    width: 100%;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding-top: 10px;
+    padding-right: 14px;
+    padding-bottom: 10px;
+    padding-left: 14px;
+    color: #e2e8f0;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
 
-.input-field:focus {
-  border-color: rgba(124, 58, 237, 0.5);
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
-}
+  .input-field:focus {
+    border-color: rgba(124, 58, 237, 0.5);
+    box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+  }
 
-.input-field::placeholder { color: #475569; }
+  .input-field::placeholder { color: #475569; }
+}
 
 /* ─── Button ─────────────────────────────────────────────────────────────────── */
 .btn-primary {

@@ -109,9 +109,9 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) { res.status(400).json({ error: 'Email and password required' }); return; }
-  const r = await auth.login(email, password);
+  const { username, password } = req.body;
+  if (!username || !password) { res.status(400).json({ error: 'Username and password required' }); return; }
+  const r = await auth.login(username, password);
   if ('error' in r) { res.status(401).json(r); return; }
   res.json(r);
 });
@@ -140,6 +140,15 @@ app.get('/api/media/:id', requireAuth, (req, res) => {
   const item = mediaLibrary.find(m => m.id === req.params.id);
   if (!item) { res.status(404).json({ error: 'Not found' }); return; }
   res.json(item);
+});
+
+app.delete('/api/media/:id', requireAuth, async (req, res) => {
+  const idx = mediaLibrary.findIndex(m => m.id === req.params.id);
+  if (idx === -1) { res.status(404).json({ error: 'Not found' }); return; }
+  mediaLibrary.splice(idx, 1);
+  await db.mediaItem.delete({ where: { id: req.params.id } }).catch(() => {});
+  io.emit('media:updated', mediaLibrary);
+  res.json({ success: true });
 });
 
 // ── Download routes ───────────────────────────────────────────────────────────

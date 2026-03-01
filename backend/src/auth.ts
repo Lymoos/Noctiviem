@@ -85,12 +85,12 @@ export async function register(
 }
 
 export async function login(
-  email: string,
+  username: string,
   password: string,
 ): Promise<{ user: PublicUser; token: string } | { error: string }> {
-  const u = await db.user.findUnique({ where: { email: email.trim().toLowerCase() } });
+  const u = await db.user.findFirst({ where: { username: { equals: username.trim(), mode: 'insensitive' } } });
   if (!u || !(await bcrypt.compare(password, u.passwordHash))) {
-    return { error: 'Invalid email or password' };
+    return { error: 'Invalid username or password' };
   }
   const token = jwt.sign({ userId: u.id }, JWT_SECRET, { expiresIn: '30d' });
   return { user: toPublic(u), token };

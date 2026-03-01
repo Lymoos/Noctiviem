@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { X, Users, Film } from 'lucide-react'
+import { X, Users, Film, Download } from 'lucide-react'
 import { MediaItem } from '../types'
+import { useStore } from '../store'
+import { translations } from '../i18n'
 
 interface CreateRoomModalProps {
   media: MediaItem[]
@@ -10,16 +12,19 @@ interface CreateRoomModalProps {
 }
 
 export default function CreateRoomModal({ media, preselectedMediaId, onClose, onCreate }: CreateRoomModalProps) {
-  const [name, setName] = useState('Movie Night')
-  const [mediaId, setMediaId] = useState(preselectedMediaId || media.find(m => m.status === 'ready')?.id || '')
+  const { lang } = useStore()
+  const t = translations[lang]
+  const readyMedia = media.filter(m => m.status === 'ready')
+  const [name, setName] = useState(t.movieNight)
+  const [mediaId, setMediaId] = useState(preselectedMediaId || readyMedia[0]?.id || '')
   const [maxParticipants, setMaxParticipants] = useState(20)
 
-  const selectedMedia = media.find(m => m.id === mediaId)
+  const selectedMedia = readyMedia.find(m => m.id === mediaId)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!mediaId) return
-    onCreate({ name: name.trim() || 'Movie Night', mediaId, maxParticipants })
+    onCreate({ name: name.trim() || t.movieNight, mediaId, maxParticipants })
   }
 
   return (
@@ -27,8 +32,8 @@ export default function CreateRoomModal({ media, preselectedMediaId, onClose, on
       <div className="modal-content" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-xl font-bold text-cinema-text">Create Cinema Hall</h2>
-            <p className="text-sm text-cinema-muted mt-0.5">You'll become the Leader</p>
+            <h2 className="text-xl font-bold text-cinema-text">{t.createCinemaHall}</h2>
+            <p className="text-sm text-cinema-muted mt-0.5">{t.youllBeLeader}</p>
           </div>
           <button onClick={onClose} className="btn-ghost p-2">
             <X size={18} />
@@ -38,59 +43,70 @@ export default function CreateRoomModal({ media, preselectedMediaId, onClose, on
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* Room name */}
           <div>
-            <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">Hall Name</label>
+            <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">{t.hallName}</label>
             <input
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
               className="input-field"
-              placeholder="Movie Night"
+              placeholder={t.movieNight}
               maxLength={50}
+              style={{ paddingLeft: '14px' }}
             />
           </div>
 
           {/* Film selection */}
           <div>
-            <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">Film</label>
-            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-              {media.filter(m => m.status === 'ready').map(m => (
-                <div
-                  key={m.id}
-                  onClick={() => setMediaId(m.id)}
-                  className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
-                    mediaId === m.id
-                      ? 'bg-purple-600/20 border border-purple-500/40'
-                      : 'bg-white/3 border border-white/5 hover:bg-white/5'
-                  }`}
-                >
-                  <img
-                    src={m.poster}
-                    alt={m.title}
-                    className="w-10 h-14 object-cover rounded"
-                    onError={e => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${m.id}/80/112` }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-cinema-text truncate">{m.title}</div>
-                    <div className="text-xs text-cinema-muted">{m.year} · {m.genre}</div>
-                    <div className="flex gap-2 mt-1">
-                      <span className="text-xs text-slate-500">{m.audio.length} audio</span>
-                      <span className="text-xs text-slate-500">{m.subtitles.filter(s=>s.id!=='off').length} subs</span>
-                    </div>
-                  </div>
-                  {mediaId === m.id && (
-                    <div className="w-5 h-5 rounded-full accent-gradient flex items-center justify-center flex-shrink-0">
-                      <span className="text-white text-xs">✓</span>
-                    </div>
-                  )}
+            <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">{t.film}</label>
+            {readyMedia.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 glass rounded-xl border border-white/5">
+                <div className="w-12 h-12 rounded-xl bg-cinema-card flex items-center justify-center opacity-40">
+                  <Download size={20} className="text-slate-400" />
                 </div>
-              ))}
-            </div>
+                <p className="text-sm text-cinema-muted font-medium">{t.noFilmsDownloaded}</p>
+                <p className="text-xs text-slate-600 text-center px-4">{t.importTorrentFirst}</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {readyMedia.map(m => (
+                  <div
+                    key={m.id}
+                    onClick={() => setMediaId(m.id)}
+                    className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                      mediaId === m.id
+                        ? 'bg-purple-600/20 border border-purple-500/40'
+                        : 'bg-white/3 border border-white/5 hover:bg-white/5'
+                    }`}
+                  >
+                    <img
+                      src={m.poster}
+                      alt={m.title}
+                      className="w-10 h-14 object-cover rounded"
+                      onError={e => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${m.id}/80/112` }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-cinema-text truncate">{m.title}</div>
+                      <div className="text-xs text-cinema-muted">{m.year} · {m.genre}</div>
+                      <div className="flex gap-2 mt-1">
+                        <span className="text-xs text-slate-500">{m.audio.length} {t.audio}</span>
+                        <span className="text-xs text-slate-500">{m.subtitles.filter(s=>s.id!=='off').length} {t.subs}</span>
+                      </div>
+                    </div>
+                    {mediaId === m.id && (
+                      <div className="w-5 h-5 rounded-full accent-gradient flex items-center justify-center flex-shrink-0">
+                        <span className="text-white text-xs">✓</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Max participants */}
           <div>
             <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">
-              Seat Limit: <span className="text-purple-400">{maxParticipants}</span>
+              {t.seatLimit}: <span className="text-purple-400">{maxParticipants}</span>
             </label>
             <input
               type="range"
@@ -109,11 +125,11 @@ export default function CreateRoomModal({ media, preselectedMediaId, onClose, on
           {/* Actions */}
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary flex-1">
-              Cancel
+              {t.cancel}
             </button>
             <button type="submit" disabled={!mediaId} className="btn-primary flex-1 flex items-center justify-center gap-2">
               <Film size={14} />
-              Create Hall
+              {t.createHall}
             </button>
           </div>
         </form>

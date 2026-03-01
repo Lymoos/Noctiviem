@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Search, Plus, Download, Upload, Settings, LogOut, Film } from 'lucide-react'
 import { useStore } from '../store'
+import { translations } from '../i18n'
 import ImportModal from './ImportModal'
 import DownloadsPanel from './DownloadsPanel'
 
@@ -13,7 +14,8 @@ interface NavbarProps {
 
 export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange }: NavbarProps) {
   const navigate = useNavigate()
-  const { account, nickname, logout, downloads, downloadsOpen, toggleDownloads } = useStore()
+  const { account, nickname, logout, downloads, downloadsOpen, toggleDownloads, lang, toggleLang } = useStore()
+  const t = translations[lang]
   const [profileOpen, setProfileOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
 
@@ -39,36 +41,46 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
 
         {/* Search */}
         <div className="flex-1 max-w-sm relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none z-10" />
           <input
             type="text"
-            placeholder="Search library…"
+            placeholder={t.searchLibrary}
             value={searchQuery}
             onChange={e => onSearchChange?.(e.target.value)}
-            className="input-field pl-9 py-2 text-sm w-full"
+            className="input-field py-2 text-sm w-full"
+            style={{ paddingLeft: '2.25rem' }}
           />
         </div>
 
         <div className="flex-1" />
 
+        {/* Language toggle */}
+        <button
+          onClick={toggleLang}
+          className="btn-ghost text-xs font-semibold px-2"
+          title={lang === 'ru' ? 'Switch to English' : 'Переключить на русский'}
+        >
+          {t.langToggleLabel}
+        </button>
+
         {/* Import */}
         <button
           onClick={() => setImportOpen(true)}
           className="btn-ghost text-sm flex items-center gap-2"
-          title="Import torrent"
+          title={t.import}
         >
           <Upload size={14} />
-          <span className="hidden sm:inline">Import</span>
+          <span className="hidden sm:inline">{t.import}</span>
         </button>
 
         {/* Downloads */}
         <button
           onClick={toggleDownloads}
           className={`btn-ghost relative flex items-center gap-2 text-sm ${downloadsOpen ? 'text-purple-400' : ''}`}
-          title="Downloads"
+          title={t.downloads}
         >
           <Download size={14} />
-          <span className="hidden sm:inline">Downloads</span>
+          <span className="hidden sm:inline">{t.downloads}</span>
           {activeDownloads > 0 && (
             <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center font-bold">
               {activeDownloads}
@@ -82,7 +94,7 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
           className="btn-primary flex items-center gap-2 py-2 px-4 text-sm"
         >
           <Plus size={14} />
-          <span>Create Hall</span>
+          <span>{t.createHall}</span>
         </button>
 
         {/* Profile menu */}
@@ -110,14 +122,14 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
                   className="flex items-center gap-2.5 px-3 py-2 text-sm text-cinema-muted hover:text-cinema-text hover:bg-white/5 rounded-lg transition-colors"
                 >
                   <Settings size={13} />
-                  Settings
+                  {t.settings}
                 </Link>
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-cinema-muted hover:text-red-400 hover:bg-red-900/10 rounded-lg transition-colors"
                 >
                   <LogOut size={13} />
-                  Sign out
+                  {t.signOut}
                 </button>
               </div>
             </>
