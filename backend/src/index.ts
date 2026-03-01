@@ -12,6 +12,27 @@ import db from './db';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Remux a video file to MP4 using ffmpeg stream-copy (no re-encode).
+ * Returns the path of the resulting .mp4 file (may differ from inputPath).
+ * If the file is already .mp4 or .webm, returns inputPath unchanged.
+ */
+async function remuxToMp4(inputPath: string): Promise<string> {
+  const ext = path.extname(inputPath).toLowerCase();
+  if (ext === '.mp4' || ext === '.webm') return inputPath;
+  const outputPath = inputPath.slice(0, -ext.length) + '.mp4';
+  if (fs.existsSync(outputPath)) return outputPath;
+  console.log(`[remux] ${path.basename(inputPath)} → mp4`);
+  await execFileAsync('ffmpeg', [
+    '-i', inputPath,
+    '-c', 'copy',
+    '-movflags', '+faststart',
+    outputPath,
+  ], { timeout: 10 * 60 * 1000 });
+  console.log(`[remux] done → ${path.basename(outputPath)}`);
+  return outputPath;
+}
+
 /** Run ffprobe on a video file and extract duration, audio streams, subtitle streams. */
 async function probeVideoFile(filePath: string): Promise<{
   duration: number;
@@ -115,11 +136,20 @@ dl.setOnCompleted(async (item) => {
 
     // f.path is the real relative path from DOWNLOADS_DIR (e.g. "Movie.mkv" for
     // single-file torrents, "TorrentName/Movie.mkv" for multi-file torrents)
-    const filePath = path.join(dl.DOWNLOADS_DIR, f.path);
+    let filePath = path.join(dl.DOWNLOADS_DIR, f.path);
+
+    // Browsers can't play MKV/AVI/etc — remux to MP4 (stream copy, fast, lossless)
+    try {
+      filePath = await remuxToMp4(filePath);
+    } catch (e: any) {
+      console.error('[remux] failed, using original file:', e.message);
+    }
+
     const { duration, audio, subtitles } = await probeVideoFile(filePath);
 
     // Build a URL-safe path by encoding each path segment individually
-    const videoUrl = '/media/' + f.path.split('/').map(encodeURIComponent).join('/');
+    const relPath = path.relative(dl.DOWNLOADS_DIR, filePath);
+    const videoUrl = '/media/' + relPath.split('/').map(encodeURIComponent).join('/');
 
     const mediaItem: MediaItem = {
       id: uuidv4(),
