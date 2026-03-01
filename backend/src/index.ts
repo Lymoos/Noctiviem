@@ -113,9 +113,13 @@ dl.setOnCompleted(async (item) => {
     const title = f.name.replace(/\.[^.]+$/, '');
     if (mediaLibrary.find(m => m.title === title)) continue;
 
-    // Probe for real duration, audio tracks and subtitle tracks
-    const filePath = path.join(dl.DOWNLOADS_DIR, item.name, f.name);
+    // f.path is the real relative path from DOWNLOADS_DIR (e.g. "Movie.mkv" for
+    // single-file torrents, "TorrentName/Movie.mkv" for multi-file torrents)
+    const filePath = path.join(dl.DOWNLOADS_DIR, f.path);
     const { duration, audio, subtitles } = await probeVideoFile(filePath);
+
+    // Build a URL-safe path by encoding each path segment individually
+    const videoUrl = '/media/' + f.path.split('/').map(encodeURIComponent).join('/');
 
     const mediaItem: MediaItem = {
       id: uuidv4(),
@@ -130,7 +134,7 @@ dl.setOnCompleted(async (item) => {
       subtitles,
       qualities: ['Auto'],
       status: 'ready',
-      videoUrl: `/media/${encodeURIComponent(item.name)}/${encodeURIComponent(f.name)}`,
+      videoUrl,
     };
     mediaLibrary.push(mediaItem);
     item.mediaIds.push(mediaItem.id);
@@ -148,7 +152,21 @@ dl.setOnCompleted(async (item) => {
   io.emit('media:updated', mediaLibrary);
 });
 
-app.use('/media', express.static(dl.DOWNLOADS_DIR));
+app.use('/media', express.static(dl.DOWNLOADS_DIR, {
+  setHeaders(res, filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.mkv': 'video/x-matroska',
+      '.mp4': 'video/mp4',
+      '.avi': 'video/x-msvideo',
+      '.mov': 'video/quicktime',
+      '.webm': 'video/webm',
+    };
+    if (mimeMap[ext]) res.setHeader('Content-Type', mimeMap[ext]);
+    // Allow seeking via range requests
+    res.setHeader('Accept-Ranges', 'bytes');
+  },
+}));
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 function requireAuth(req: Request, res: Response, next: NextFunction) {

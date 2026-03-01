@@ -15,6 +15,7 @@ const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.t
 
 export interface DownloadFile {
   name: string;
+  path: string;   // relative path from DOWNLOADS_DIR (use this for filesystem access)
   size: number;
   progress: number;
   isVideo: boolean;
@@ -231,6 +232,7 @@ async function startDownload(id: string) {
       item.total = torrent.length || 0;
       item.files = torrent.files.map((f: any) => ({
         name: f.name,
+        path: f.path,
         size: f.length,
         progress: 0,
         isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
@@ -252,7 +254,7 @@ async function startDownload(id: string) {
       d.eta = torrent.timeRemaining > 0 ? Math.floor(torrent.timeRemaining / 1000) : -1;
       if (torrent.files) {
         d.files = torrent.files.map((f: any) => ({
-          name: f.name, size: f.length,
+          name: f.name, path: f.path, size: f.length,
           progress: f.progress ?? 0,
           isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
         }));
@@ -273,7 +275,7 @@ async function startDownload(id: string) {
       d.completedAt = Date.now();
       if (torrent.files) {
         d.files = torrent.files.map((f: any) => ({
-          name: f.name, size: f.length, progress: 1,
+          name: f.name, path: f.path, size: f.length, progress: 1,
           isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
         }));
       }
@@ -321,6 +323,7 @@ const SUB_EXTS   = new Set(['.srt', '.ass', '.ssa', '.vtt', '.sub', '.idx', '.su
 export interface TorrentFilePreview {
   index: number;
   name: string;
+  path: string;
   size: number;
   isVideo: boolean;
   isAudio: boolean;
@@ -377,6 +380,7 @@ export async function preview(
         return {
           index: idx,
           name: f.name,
+          path: f.path,
           size: f.length ?? 0,
           isVideo: VIDEO_EXTS.has(ext),
           isAudio: AUDIO_EXTS.has(ext),
@@ -387,7 +391,7 @@ export async function preview(
       item.name    = torrent.name || item.name;
       item.total   = torrent.length || 0;
       item.infoHash = torrent.infoHash || '';
-      item.files   = files.map(f => ({ name: f.name, size: f.size, progress: 0, isVideo: f.isVideo }));
+      item.files   = files.map(f => ({ name: f.name, path: f.path, size: f.size, progress: 0, isVideo: f.isVideo }));
 
       pendingPreviews.set(previewId, { torrent, item, files });
 
@@ -457,7 +461,7 @@ export async function confirmDownload(
     d.eta           = torrent.timeRemaining > 0 ? Math.floor(torrent.timeRemaining / 1000) : -1;
     if (torrent.files) {
       d.files = torrent.files.map((f: any, idx: number) => ({
-        name: f.name, size: f.length,
+        name: f.name, path: f.path, size: f.length,
         progress: selectedIndices.includes(idx) ? (f.progress ?? 0) : -1,
         isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
       }));
@@ -475,7 +479,7 @@ export async function confirmDownload(
     d.completedAt = Date.now();
     if (torrent.files) {
       d.files = torrent.files.map((f: any, idx: number) => ({
-        name: f.name, size: f.length,
+        name: f.name, path: f.path, size: f.length,
         progress: selectedIndices.includes(idx) ? 1 : -1,
         isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
       }));
