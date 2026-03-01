@@ -78,6 +78,51 @@ export interface RoomPreview {
   leaderId: string;
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+export interface UserSettings {
+  nickname: string;
+  avatarSeed: string;
+  defaultQuality: string;
+  defaultAudioLang: string;
+  defaultSubsLang: string;
+  maxConcurrentDownloads: number;
+  autoSyncOnJoin: boolean;
+}
+
+export interface Account {
+  id: string;
+  username: string;
+  email: string;
+  createdAt: number;
+  settings: UserSettings;
+}
+
+// ── Downloads ─────────────────────────────────────────────────────────────────
+export interface DownloadFile {
+  name: string;
+  size: number;
+  progress: number;
+  isVideo: boolean;
+}
+
+export interface DownloadItem {
+  id: string;
+  name: string;
+  status: 'queued' | 'metadata' | 'downloading' | 'completed' | 'error' | 'paused';
+  progress: number;
+  downloaded: number;
+  total: number;
+  downloadSpeed: number;
+  uploadSpeed: number;
+  numPeers: number;
+  eta: number;
+  files: DownloadFile[];
+  error?: string;
+  createdAt: number;
+  completedAt?: number;
+  mediaIds: string[];
+}
+
 export interface ActiveBubble {
   userId: string;
   text: string;

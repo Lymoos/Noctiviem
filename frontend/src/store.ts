@@ -1,22 +1,76 @@
 import { create } from 'zustand';
-import { RoomState, User, Message, Reaction, MediaItem } from './types';
+import { RoomState, User, Message, Reaction, MediaItem, Account, DownloadItem } from './types';
 
+// ── Token helpers ────────────────────────────────────────────────────────────
+const TOKEN_KEY = 'noctiviem_token';
+const USERID_KEY = 'noctiviem_userId';
+const NICK_KEY = 'noctiviem_nickname';
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
+export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+
+const storedUserId = localStorage.getItem(USERID_KEY) || crypto.randomUUID();
+const storedNickname = localStorage.getItem(NICK_KEY) || `Viewer_${storedUserId.slice(0, 4).toUpperCase()}`;
+if (!localStorage.getItem(USERID_KEY)) localStorage.setItem(USERID_KEY, storedUserId);
+if (!localStorage.getItem(NICK_KEY)) localStorage.setItem(NICK_KEY, storedNickname);
+
+// ── Fetch helpers ────────────────────────────────────────────────────────────
+function authHeaders() {
+  const t = getToken();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+export async function apiFetch<T = unknown>(
+  url: string,
+  options: RequestInit = {},
+): Promise<T & { error?: string }> {
+  const r = await fetch(url, {
+    ...options,
+    headers: { ...authHeaders(), ...(options.headers ?? {}) },
+  });
+  return r.json() as Promise<T & { error?: string }>;
+}
+
+export async function apiPost<T = unknown>(url: string, body: unknown): Promise<T & { error?: string }> {
+  return apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+export async function apiPatch<T = unknown>(url: string, body: unknown): Promise<T & { error?: string }> {
+  return apiFetch(url, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+export async function apiDelete(url: string) {
+  return apiFetch<{ success: boolean }>(url, { method: 'DELETE' });
+}
+
+// ── Store interface ──────────────────────────────────────────────────────────
 interface AppStore {
   // Auth
+  account: Account | null;
+  isAuthenticated: boolean;
   userId: string;
   nickname: string;
+  setAccount: (account: Account, token: string) => void;
+  updateAccount: (account: Account) => void;
+  logout: () => void;
   setNickname: (n: string) => void;
 
   // Media
   mediaLibrary: MediaItem[];
   setMediaLibrary: (items: MediaItem[]) => void;
 
+  // Downloads
+  downloads: DownloadItem[];
+  setDownloads: (items: DownloadItem[]) => void;
+  downloadsOpen: boolean;
+  toggleDownloads: () => void;
+
   // Room
   room: RoomState | null;
   media: MediaItem | null;
   currentUser: User | null;
   isInRoom: boolean;
-
   setRoom: (room: RoomState, media?: MediaItem | null) => void;
   setCurrentUser: (user: User) => void;
   updateRoomSync: (data: Partial<Pick<RoomState, 'currentTime' | 'isPlaying'>>) => void;
@@ -35,85 +89,85 @@ interface AppStore {
   toggleLeaderPanel: () => void;
 }
 
-const storedUserId = localStorage.getItem('noctiviem_userId') || crypto.randomUUID();
-const storedNickname = localStorage.getItem('noctiviem_nickname') || `Viewer_${storedUserId.slice(0, 4).toUpperCase()}`;
-if (!localStorage.getItem('noctiviem_userId')) localStorage.setItem('noctiviem_userId', storedUserId);
-if (!localStorage.getItem('noctiviem_nickname')) localStorage.setItem('noctiviem_nickname', storedNickname);
-
-export const useStore = create<AppStore>((set, get) => ({
+export const useStore = create<AppStore>((set) => ({
+  // Auth
+  account: null,
+  isAuthenticated: !!getToken(),
   userId: storedUserId,
   nickname: storedNickname,
+
+  setAccount: (account, token) => {
+    setToken(token);
+    localStorage.setItem(NICK_KEY, account.settings.nickname);
+    set({ account, isAuthenticated: true, nickname: account.settings.nickname });
+  },
+
+  updateAccount: (account) => {
+    localStorage.setItem(NICK_KEY, account.settings.nickname);
+    set({ account, nickname: account.settings.nickname });
+  },
+
+  logout: () => {
+    clearToken();
+    set({ account: null, isAuthenticated: false });
+  },
+
   setNickname: (n) => {
-    localStorage.setItem('noctiviem_nickname', n);
+    localStorage.setItem(NICK_KEY, n);
     set({ nickname: n });
   },
 
+  // Media
   mediaLibrary: [],
   setMediaLibrary: (items) => set({ mediaLibrary: items }),
 
+  // Downloads
+  downloads: [],
+  setDownloads: (items) => set({ downloads: items }),
+  downloadsOpen: false,
+  toggleDownloads: () => set(s => ({ downloadsOpen: !s.downloadsOpen })),
+
+  // Room
   room: null,
   media: null,
   currentUser: null,
   isInRoom: false,
+  setRoom: (room, media = null) => set({ room, media: media ?? null, isInRoom: true }),
+  setCurrentUser: (u) => set({ currentUser: u }),
 
-  setRoom: (room, media = null) => set({ room, media, isInRoom: true }),
-  setCurrentUser: (user) => set({ currentUser: user }),
+  updateRoomSync: (data) => set(s => ({ room: s.room ? { ...s.room, ...data } : null })),
+  updateRoomSettings: (data) => set(s => ({ room: s.room ? { ...s.room, ...data } : null })),
 
-  updateRoomSync: (data) => set(state => ({
-    room: state.room ? { ...state.room, ...data } : null,
-  })),
-
-  updateRoomSettings: (data) => set(state => ({
-    room: state.room ? { ...state.room, ...data } : null,
-  })),
-
-  updateParticipants: (participants, newLeaderId) => set(state => {
-    if (!state.room) return {};
-    const updatedRoom = { ...state.room, participants };
-    if (newLeaderId) updatedRoom.leaderId = newLeaderId;
-    const updatedUser = state.currentUser
-      ? participants.find(p => p.id === state.currentUser!.id) || state.currentUser
-      : null;
-    return { room: updatedRoom, currentUser: updatedUser };
+  updateParticipants: (participants, newLeaderId) => set(s => {
+    if (!s.room) return {};
+    const room = { ...s.room, participants, ...(newLeaderId ? { leaderId: newLeaderId } : {}) };
+    const currentUser = s.currentUser ? participants.find(p => p.id === s.currentUser!.id) ?? s.currentUser : null;
+    return { room, currentUser };
   }),
 
-  addParticipant: (_participant, participants) => set(state => ({
-    room: state.room ? { ...state.room, participants } : null,
-  })),
+  addParticipant: (_p, participants) => set(s => ({ room: s.room ? { ...s.room, participants } : null })),
 
-  addMessage: (msg) => set(state => {
-    if (!state.room) return {};
-    const messages = [...state.room.messages, msg].slice(-300);
-    return { room: { ...state.room, messages } };
+  addMessage: (msg) => set(s => {
+    if (!s.room) return {};
+    return { room: { ...s.room, messages: [...s.room.messages, msg].slice(-300) } };
   }),
 
-  deleteMessage: (messageId) => set(state => {
-    if (!state.room) return {};
-    return {
-      room: {
-        ...state.room,
-        messages: state.room.messages.filter(m => m.id !== messageId),
-      },
-    };
+  deleteMessage: (id) => set(s => {
+    if (!s.room) return {};
+    return { room: { ...s.room, messages: s.room.messages.filter(m => m.id !== id) } };
   }),
 
-  addReaction: (reaction) => set(state => {
-    if (!state.room) return {};
-    const reactions = [...state.room.reactions, reaction].slice(-500);
-    return { room: { ...state.room, reactions } };
+  addReaction: (r) => set(s => {
+    if (!s.room) return {};
+    return { room: { ...s.room, reactions: [...s.room.reactions, r].slice(-500) } };
   }),
 
   clearRoom: () => set({ room: null, media: null, currentUser: null, isInRoom: false }),
 
   chatOpen: true,
-  toggleChat: () => set(state => ({ chatOpen: !state.chatOpen })),
+  toggleChat: () => set(s => ({ chatOpen: !s.chatOpen })),
   leaderPanelOpen: false,
-  toggleLeaderPanel: () => set(state => ({ leaderPanelOpen: !state.leaderPanelOpen })),
+  toggleLeaderPanel: () => set(s => ({ leaderPanelOpen: !s.leaderPanelOpen })),
 }));
 
-// Derived selector helpers
-export const selectIsLeader = (state: AppStore) =>
-  state.currentUser?.isLeader ?? false;
-
-export const selectParticipantCount = (state: AppStore) =>
-  state.room?.participants.length ?? 0;
+export const selectIsLeader = (s: AppStore) => s.currentUser?.isLeader ?? false;

@@ -13,8 +13,10 @@ if (!nickname) {
   localStorage.setItem('noctiviem_nickname', nickname);
 }
 
+const token = localStorage.getItem('noctiviem_token') ?? '';
+
 export const socket: Socket = io('/', {
-  query: { userId, nickname },
+  query: { userId, nickname, token },
   autoConnect: false,
   reconnection: true,
   reconnectionAttempts: 5,

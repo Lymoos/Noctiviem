@@ -1,40 +1,45 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Library, Download, Clapperboard, Plug, Plus, Film, Users, Zap } from 'lucide-react'
+import { Library, Download, Clapperboard, Upload, Plus, Film, Users, Zap } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import MediaCard from '../components/MediaCard'
 import RoomCard from '../components/RoomCard'
 import CreateRoomModal from '../components/CreateRoomModal'
-import { useStore } from '../store'
+import { useStore, apiFetch } from '../store'
 import { socket, connectSocket } from '../socket'
 import { MediaItem, RoomState, User } from '../types'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { setMediaLibrary, mediaLibrary, setRoom, setCurrentUser, nickname } = useStore()
+  const { setMediaLibrary, mediaLibrary, setRoom, setCurrentUser, nickname, toggleDownloads } = useStore()
   const [loading, setLoading] = useState(true)
   const [createError, setCreateError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [preselectedMedia, setPreselectedMedia] = useState<string | undefined>()
-  const [connectSourceOpen, setConnectSourceOpen] = useState(false)
   const [myRooms, setMyRooms] = useState<{ id: string; name: string; mediaTitle: string; mediaPoster: string; participantCount: number; maxParticipants: number; isPlaying: boolean; isLocked: boolean; isLeader: boolean }[]>([])
 
   // Fetch media library
   useEffect(() => {
-    fetch('/api/media')
-      .then(r => r.json())
-      .then((data: MediaItem[]) => {
+    apiFetch<MediaItem[]>('/api/media')
+      .then(data => {
+        if (!Array.isArray(data)) return
         setMediaLibrary(data)
         setLoading(false)
       })
       .catch(() => setLoading(false))
   }, [setMediaLibrary])
 
-  // Connect socket
+  // Connect socket + listen for live media updates
   useEffect(() => {
     connectSocket()
-  }, [])
+
+    socket.on('media:updated', (items: MediaItem[]) => {
+      setMediaLibrary(items)
+    })
+
+    return () => { socket.off('media:updated') }
+  }, [setMediaLibrary])
 
   const handleCreateRoom = useCallback((data: { name: string; mediaId: string; maxParticipants: number }) => {
     setCreateModalOpen(false)
@@ -77,7 +82,6 @@ export default function Dashboard() {
     <div className="min-h-screen bg-cinema-bg">
       <Navbar
         onCreateRoom={() => handleOpenCreate()}
-        onConnectSource={() => setConnectSourceOpen(true)}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
       />
@@ -146,10 +150,11 @@ export default function Dashboard() {
               <div className="w-16 h-16 rounded-2xl accent-gradient flex items-center justify-center mb-4 opacity-30">
                 <Film size={28} className="text-white" />
               </div>
-              <p className="text-cinema-muted text-sm">No films found</p>
-              <button onClick={() => setConnectSourceOpen(true)} className="btn-primary mt-4 text-sm flex items-center gap-2">
-                <Plug size={13} />
-                Connect a Source
+              <p className="text-cinema-muted text-sm">No films yet</p>
+              <p className="text-xs text-slate-600 mt-1 mb-4">Import a torrent to get started</p>
+              <button onClick={toggleDownloads} className="btn-primary mt-2 text-sm flex items-center gap-2">
+                <Upload size={13} />
+                Open Downloads
               </button>
             </div>
           ) : (
@@ -166,12 +171,12 @@ export default function Dashboard() {
           )}
         </section>
 
-        {/* ── DOWNLOADED ── */}
+        {/* ── DOWNLOADING / PROCESSING ── */}
         {processingMedia.length > 0 && (
           <section>
             <div className="section-header">
               <Download size={16} className="text-blue-400" />
-              <h2 className="section-title">Downloaded</h2>
+              <h2 className="section-title">Processing</h2>
               <div className="section-line" />
               <span className="text-xs text-slate-500">{processingMedia.length} files</span>
             </div>
@@ -231,39 +236,6 @@ export default function Dashboard() {
           onClose={() => setCreateModalOpen(false)}
           onCreate={handleCreateRoom}
         />
-      )}
-
-      {/* Connect Source Modal */}
-      {connectSourceOpen && (
-        <div className="modal-backdrop" onClick={() => setConnectSourceOpen(false)}>
-          <div className="modal-content max-w-md" onClick={e => e.stopPropagation()}>
-            <h2 className="text-xl font-bold text-cinema-text mb-2">Connect Source</h2>
-            <p className="text-sm text-cinema-muted mb-6">
-              Connect a media server, NAS, or cloud storage to automatically populate your library.
-            </p>
-            <div className="space-y-3">
-              {['Jellyfin / Emby', 'Plex Media Server', 'Local Network (SMB)', 'WebDAV', 'S3 / R2 Storage'].map(src => (
-                <div key={src} className="flex items-center justify-between p-3 glass rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-purple-600/20 flex items-center justify-center">
-                      <Plug size={14} className="text-purple-400" />
-                    </div>
-                    <span className="text-sm text-cinema-text">{src}</span>
-                  </div>
-                  <button className="text-xs text-purple-400 hover:text-purple-300 transition-colors">
-                    Connect →
-                  </button>
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={() => setConnectSourceOpen(false)}
-              className="btn-secondary w-full mt-5"
-            >
-              Close
-            </button>
-          </div>
-        </div>
       )}
     </div>
   )
