@@ -30,6 +30,10 @@ async function remuxToMp4(inputPath: string): Promise<string> {
     outputPath,
   ], { timeout: 10 * 60 * 1000 });
   console.log(`[remux] done → ${path.basename(outputPath)}`);
+  fs.unlink(inputPath, err => {
+    if (err) console.warn(`[remux] could not delete original: ${err.message}`);
+    else console.log(`[remux] deleted original ${path.basename(inputPath)}`);
+  });
   return outputPath;
 }
 
