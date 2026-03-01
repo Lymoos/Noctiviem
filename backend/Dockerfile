@@ -23,7 +23,6 @@ WORKDIR /app
 # Copy compiled JS and workspace node_modules (includes Prisma client)
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/backend/dist ./dist
-COPY --from=builder /app/backend/node_modules ./backend/node_modules
 
 # Prisma schema needed for db push / migrate deploy at runtime
 COPY backend/prisma ./prisma
