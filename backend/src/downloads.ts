@@ -1,11 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import fs from 'fs';
+import db from './db';
 
-export const DOWNLOADS_DIR = path.join(__dirname, '../../downloads');
-export const MEDIA_DIR = path.join(__dirname, '../../media');
+// Storage paths — override via env vars in Docker or .env
+export const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR ?? path.join(process.cwd(), 'backend', 'downloads');
+export const UPLOADS_DIR   = process.env.UPLOADS_DIR   ?? path.join(process.cwd(), 'backend', 'uploads');
 
-for (const d of [DOWNLOADS_DIR, MEDIA_DIR]) {
+for (const d of [DOWNLOADS_DIR, UPLOADS_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
@@ -24,24 +26,25 @@ export interface DownloadItem {
   torrentPath: string;
   infoHash: string;
   status: 'queued' | 'metadata' | 'downloading' | 'completed' | 'error' | 'paused';
-  progress: number;          // 0–1
-  downloaded: number;        // bytes
-  total: number;             // bytes
-  downloadSpeed: number;     // bytes/sec
+  progress: number;       // 0–1
+  downloaded: number;     // bytes
+  total: number;          // bytes
+  downloadSpeed: number;  // bytes/sec
   uploadSpeed: number;
   numPeers: number;
-  eta: number;               // seconds, -1 = unknown
+  eta: number;            // seconds, -1 = unknown
   files: DownloadFile[];
   error?: string;
   createdAt: number;
   completedAt?: number;
-  mediaIds: string[];        // IDs added to library on completion
+  mediaIds: string[];
 }
 
 const downloads = new Map<string, DownloadItem>();
 let broadcastFn: ((items: DownloadItem[]) => void) | null = null;
 
-// webtorrent client (lazy-loaded once)
+// ── webtorrent client (lazy-loaded) ──────────────────────────────────────────
+
 let wtClient: any = null;
 
 function getWTClient(): any {
@@ -58,12 +61,53 @@ function getWTClient(): any {
   return wtClient;
 }
 
-export function setBroadcast(fn: (items: DownloadItem[]) => void) {
-  broadcastFn = fn;
+// ── DB persistence ────────────────────────────────────────────────────────────
+
+async function saveToDb(item: DownloadItem): Promise<void> {
+  await db.download.upsert({
+    where: { id: item.id },
+    update: {
+      name: item.name,
+      infoHash: item.infoHash,
+      status: item.status,
+      progress: item.progress,
+      downloaded: item.downloaded,
+      total: item.total,
+      downloadSpeed: item.downloadSpeed,
+      uploadSpeed: item.uploadSpeed,
+      numPeers: item.numPeers,
+      eta: item.eta,
+      files: item.files as any,
+      error: item.error ?? null,
+      mediaIds: item.mediaIds as any,
+      completedAt: item.completedAt ? new Date(item.completedAt) : null,
+    },
+    create: {
+      id: item.id,
+      name: item.name,
+      torrentPath: item.torrentPath,
+      infoHash: item.infoHash,
+      status: item.status,
+      progress: item.progress,
+      downloaded: item.downloaded,
+      total: item.total,
+      downloadSpeed: item.downloadSpeed,
+      uploadSpeed: item.uploadSpeed,
+      numPeers: item.numPeers,
+      eta: item.eta,
+      files: item.files as any,
+      error: item.error ?? null,
+      mediaIds: item.mediaIds as any,
+      createdAt: new Date(item.createdAt),
+      completedAt: item.completedAt ? new Date(item.completedAt) : null,
+    },
+  });
 }
 
-function emit() {
-  broadcastFn?.(list());
+// ── Public API ────────────────────────────────────────────────────────────────
+
+export function setBroadcast(fn: (items: DownloadItem[]) => void) {
+  broadcastFn = fn;
 }
 
 export function list(): DownloadItem[] {
@@ -74,7 +118,37 @@ export function get(id: string): DownloadItem | undefined {
   return downloads.get(id);
 }
 
-export function add(torrentFilePath: string, displayName: string): DownloadItem {
+/** Load persisted downloads from DB on server startup */
+export async function init(): Promise<void> {
+  const rows = await db.download.findMany({ orderBy: { createdAt: 'desc' } });
+  for (const row of rows) {
+    const wasActive = row.status === 'downloading' || row.status === 'metadata';
+    const item: DownloadItem = {
+      id: row.id,
+      name: row.name,
+      torrentPath: row.torrentPath,
+      infoHash: row.infoHash,
+      status: wasActive ? 'error' : (row.status as DownloadItem['status']),
+      error: wasActive ? 'Server was restarted' : (row.error ?? undefined),
+      progress: row.progress,
+      downloaded: row.downloaded,
+      total: row.total,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      numPeers: 0,
+      eta: -1,
+      files: (row.files as DownloadFile[]) ?? [],
+      createdAt: row.createdAt.getTime(),
+      completedAt: row.completedAt?.getTime(),
+      mediaIds: (row.mediaIds as string[]) ?? [],
+    };
+    downloads.set(item.id, item);
+    // Restart anything that was queued before restart
+    if (row.status === 'queued') startDownload(item.id);
+  }
+}
+
+export async function add(torrentFilePath: string, displayName: string): Promise<DownloadItem> {
   const id = uuidv4();
   const item: DownloadItem = {
     id,
@@ -94,15 +168,15 @@ export function add(torrentFilePath: string, displayName: string): DownloadItem 
     mediaIds: [],
   };
   downloads.set(id, item);
-  emit();
+  await saveToDb(item);
+  broadcastFn?.(list());
   startDownload(id);
   return item;
 }
 
-export function remove(id: string): boolean {
+export async function remove(id: string): Promise<boolean> {
   const item = downloads.get(id);
   if (!item) return false;
-  // Try to remove from webtorrent if active
   try {
     const client = getWTClient();
     if (client && item.infoHash) {
@@ -110,10 +184,12 @@ export function remove(id: string): boolean {
       if (t) t.destroy();
     }
   } catch {}
-  return downloads.delete(id);
+  downloads.delete(id);
+  await db.download.delete({ where: { id } }).catch(() => {});
+  return true;
 }
 
-// ── Actual download logic ─────────────────────────────────────────────────────
+// ── Download logic ────────────────────────────────────────────────────────────
 
 function startDownload(id: string) {
   const item = downloads.get(id);
@@ -123,12 +199,13 @@ function startDownload(id: string) {
   if (!client) {
     item.status = 'error';
     item.error = 'WebTorrent failed to initialize. Check server logs.';
-    emit();
+    saveToDb(item).catch(() => {});
+    broadcastFn?.(list());
     return;
   }
 
   item.status = 'metadata';
-  emit();
+  broadcastFn?.(list());
 
   try {
     const torrent = client.add(item.torrentPath, { path: DOWNLOADS_DIR });
@@ -147,10 +224,11 @@ function startDownload(id: string) {
         progress: 0,
         isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
       }));
-      emit();
+      saveToDb(item).catch(() => {});
+      broadcastFn?.(list());
     });
 
-    // Progress tick
+    // Progress tick every 1.2s
     const tick = setInterval(() => {
       const d = downloads.get(id);
       if (!d || d.status !== 'downloading') { clearInterval(tick); return; }
@@ -163,13 +241,13 @@ function startDownload(id: string) {
       d.eta = torrent.timeRemaining > 0 ? Math.floor(torrent.timeRemaining / 1000) : -1;
       if (torrent.files) {
         d.files = torrent.files.map((f: any) => ({
-          name: f.name,
-          size: f.length,
+          name: f.name, size: f.length,
           progress: f.progress ?? 0,
           isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
         }));
       }
-      emit();
+      saveToDb(d).catch(() => {});
+      broadcastFn?.(list());
     }, 1200);
 
     torrent.on('done', () => {
@@ -184,14 +262,12 @@ function startDownload(id: string) {
       d.completedAt = Date.now();
       if (torrent.files) {
         d.files = torrent.files.map((f: any) => ({
-          name: f.name,
-          size: f.length,
-          progress: 1,
+          name: f.name, size: f.length, progress: 1,
           isVideo: VIDEO_EXTS.has(path.extname(f.name).toLowerCase()),
         }));
       }
-      emit();
-      // Notify media library to re-scan
+      saveToDb(d).catch(() => {});
+      broadcastFn?.(list());
       onCompletedFn?.(d);
     });
 
@@ -201,23 +277,22 @@ function startDownload(id: string) {
       if (!d) return;
       d.status = 'error';
       d.error = err.message;
-      emit();
+      saveToDb(d).catch(() => {});
+      broadcastFn?.(list());
     });
 
   } catch (err: any) {
     item.status = 'error';
     item.error = err.message ?? 'Unknown error';
-    emit();
+    saveToDb(item).catch(() => {});
+    broadcastFn?.(list());
   }
 }
 
-// Callback for when a download completes → called by index.ts to add to library
 let onCompletedFn: ((item: DownloadItem) => void) | null = null;
 export function setOnCompleted(fn: (item: DownloadItem) => void) {
   onCompletedFn = fn;
 }
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';

@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                     String   @id @default(uuid())
+  username               String   @unique
+  email                  String   @unique
+  passwordHash           String
+  nickname               String
+  avatarSeed             String   @default("")
+  defaultQuality         String   @default("Auto")
+  defaultAudioLang       String   @default("und")
+  defaultSubsLang        String   @default("off")
+  maxConcurrentDownloads Int      @default(2)
+  autoSyncOnJoin         Boolean  @default(true)
+  createdAt              DateTime @default(now())
+
+  @@map("users")
+}
+
+model MediaItem {
+  id          String   @id @default(uuid())
+  title       String
+  poster      String   @default("")
+  thumbnail   String   @default("")
+  duration    Int      @default(0)
+  year        Int      @default(0)
+  genre       String   @default("Downloaded")
+  description String   @default("")
+  audio       Json     @default("[]")
+  subtitles   Json     @default("[]")
+  qualities   Json     @default("[]")
+  status      String   @default("processing")
+  videoUrl    String
+  createdAt   DateTime @default(now())
+
+  @@map("media_items")
+}
+
+model Download {
+  id            String    @id @default(uuid())
+  name          String
+  torrentPath   String
+  infoHash      String    @default("")
+  status        String    @default("queued")
+  progress      Float     @default(0)
+  downloaded    Float     @default(0)
+  total         Float     @default(0)
+  downloadSpeed Float     @default(0)
+  uploadSpeed   Float     @default(0)
+  numPeers      Int       @default(0)
+  eta           Float     @default(0)
+  files         Json      @default("[]")
+  error         String?
+  mediaIds      Json      @default("[]")
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  @@map("downloads")
+}

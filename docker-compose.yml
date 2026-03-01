@@ -1,0 +1,52 @@
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: noctiviem
+      POSTGRES_USER: noctiviem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-noctiviem_dev}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noctiviem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend (Node.js + Socket.io) ──────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://noctiviem:${POSTGRES_PASSWORD:-noctiviem_dev}@postgres:5432/noctiviem
+      JWT_SECRET: ${JWT_SECRET:-change_me_please}
+      NODE_ENV: production
+      PORT: 3001
+      DOWNLOADS_DIR: /data/downloads
+      UPLOADS_DIR: /data/uploads
+    volumes:
+      - downloads_data:/data/downloads
+      - uploads_data:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Frontend (Vite build → nginx) ──────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  downloads_data:
+  uploads_data:

@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import db from './db';
 import * as rm from './roomManager';
 import * as auth from './auth';
 import * as dl from './downloads';
@@ -21,7 +22,7 @@ const io = new Server(httpServer, {
 });
 
 // ── Multer for .torrent uploads ──────────────────────────────────────────────
-const UPLOADS_DIR = path.join(__dirname, '../../uploads');
+const UPLOADS_DIR = process.env.UPLOADS_DIR ?? path.join(process.cwd(), 'backend', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const upload = multer({
@@ -36,32 +37,53 @@ const upload = multer({
   },
 });
 
-// ── Dynamic media library ────────────────────────────────────────────────────
+// ── Media library (loaded from DB at startup, updated on torrent completion) ──
 const mediaLibrary: MediaItem[] = [];
 
-dl.setOnCompleted((item) => {
-  item.files
-    .filter(f => f.isVideo)
-    .forEach(f => {
-      if (mediaLibrary.find(m => m.title === f.name.replace(/\.[^.]+$/, ''))) return;
-      const mediaItem: MediaItem = {
-        id: uuidv4(),
-        title: f.name.replace(/\.[^.]+$/, ''),
-        poster: `https://picsum.photos/seed/${item.id}/400/600`,
-        thumbnail: `https://picsum.photos/seed/${item.id}/800/450`,
-        duration: 0,
-        year: new Date().getFullYear(),
-        genre: 'Downloaded',
-        description: `Downloaded via torrent: ${item.name}`,
-        audio: [{ id: 0, label: 'Track 1', lang: 'und' }],
-        subtitles: [{ id: 'off', label: 'Off', lang: 'off' }],
-        qualities: ['Auto'],
-        status: 'ready',
-        videoUrl: `/media/${encodeURIComponent(item.name)}/${encodeURIComponent(f.name)}`,
-      };
-      mediaLibrary.push(mediaItem);
-      item.mediaIds.push(mediaItem.id);
-    });
+function dbRowToMediaItem(row: any): MediaItem {
+  return {
+    id: row.id, title: row.title, poster: row.poster, thumbnail: row.thumbnail,
+    duration: row.duration, year: row.year, genre: row.genre, description: row.description,
+    audio: row.audio as MediaItem['audio'],
+    subtitles: row.subtitles as MediaItem['subtitles'],
+    qualities: row.qualities as string[],
+    status: row.status as MediaItem['status'],
+    videoUrl: row.videoUrl,
+  };
+}
+
+dl.setOnCompleted(async (item) => {
+  for (const f of item.files.filter(f => f.isVideo)) {
+    const title = f.name.replace(/\.[^.]+$/, '');
+    if (mediaLibrary.find(m => m.title === title)) continue;
+    const mediaItem: MediaItem = {
+      id: uuidv4(),
+      title,
+      poster: `https://picsum.photos/seed/${item.id}/400/600`,
+      thumbnail: `https://picsum.photos/seed/${item.id}/800/450`,
+      duration: 0,
+      year: new Date().getFullYear(),
+      genre: 'Downloaded',
+      description: `Downloaded via torrent: ${item.name}`,
+      audio: [{ id: 0, label: 'Track 1', lang: 'und' }],
+      subtitles: [{ id: 'off', label: 'Off', lang: 'off' }],
+      qualities: ['Auto'],
+      status: 'ready',
+      videoUrl: `/media/${encodeURIComponent(item.name)}/${encodeURIComponent(f.name)}`,
+    };
+    mediaLibrary.push(mediaItem);
+    item.mediaIds.push(mediaItem.id);
+    await db.mediaItem.create({
+      data: {
+        id: mediaItem.id, title: mediaItem.title, poster: mediaItem.poster,
+        thumbnail: mediaItem.thumbnail, duration: mediaItem.duration, year: mediaItem.year,
+        genre: mediaItem.genre, description: mediaItem.description,
+        audio: mediaItem.audio as any, subtitles: mediaItem.subtitles as any,
+        qualities: mediaItem.qualities as any, status: mediaItem.status,
+        videoUrl: mediaItem.videoUrl,
+      },
+    }).catch((e: Error) => console.error('[media] DB save failed:', e.message));
+  }
   io.emit('media:updated', mediaLibrary);
 });
 
@@ -77,41 +99,41 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-// ── Auth routes ──────────────────────────────────────────────────────────────
-app.post('/api/auth/register', (req, res) => {
+// ── Auth routes (async) ───────────────────────────────────────────────────────
+app.post('/api/auth/register', async (req, res) => {
   const { username, email, password } = req.body;
   if (!username || !email || !password) { res.status(400).json({ error: 'All fields required' }); return; }
-  const r = auth.register(username, email, password);
+  const r = await auth.register(username, email, password);
   if ('error' in r) { res.status(400).json(r); return; }
   res.json(r);
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) { res.status(400).json({ error: 'Email and password required' }); return; }
-  const r = auth.login(email, password);
+  const r = await auth.login(email, password);
   if ('error' in r) { res.status(401).json(r); return; }
   res.json(r);
 });
 
-app.get('/api/auth/me', requireAuth, (req, res) => {
-  const user = auth.getById((req as any).userId);
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  const user = await auth.getById((req as any).userId);
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
   res.json({ user });
 });
 
-app.patch('/api/auth/settings', requireAuth, (req, res) => {
-  const r = auth.updateSettings((req as any).userId, req.body);
+app.patch('/api/auth/settings', requireAuth, async (req, res) => {
+  const r = await auth.updateSettings((req as any).userId, req.body);
   if ('error' in r) { res.status(400).json(r); return; }
   res.json(r);
 });
 
-app.delete('/api/auth/account', requireAuth, (req, res) => {
-  auth.deleteAccount((req as any).userId);
+app.delete('/api/auth/account', requireAuth, async (req, res) => {
+  await auth.deleteAccount((req as any).userId);
   res.json({ success: true });
 });
 
-// ── Media routes ─────────────────────────────────────────────────────────────
+// ── Media routes ──────────────────────────────────────────────────────────────
 app.get('/api/media', requireAuth, (_req, res) => { res.json(mediaLibrary); });
 
 app.get('/api/media/:id', requireAuth, (req, res) => {
@@ -123,14 +145,14 @@ app.get('/api/media/:id', requireAuth, (req, res) => {
 // ── Download routes ───────────────────────────────────────────────────────────
 app.get('/api/downloads', requireAuth, (_req, res) => { res.json(dl.list()); });
 
-app.post('/api/downloads', requireAuth, upload.single('torrent'), (req, res) => {
+app.post('/api/downloads', requireAuth, upload.single('torrent'), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: 'No .torrent file uploaded' }); return; }
-  const item = dl.add(req.file.path, req.file.originalname);
+  const item = await dl.add(req.file.path, req.file.originalname);
   res.json(item);
 });
 
-app.delete('/api/downloads/:id', requireAuth, (req, res) => {
-  res.json({ success: dl.remove(req.params.id) });
+app.delete('/api/downloads/:id', requireAuth, async (req, res) => {
+  res.json({ success: await dl.remove(req.params.id) });
 });
 
 // ── Room invite preview (public — shareable link) ─────────────────────────────
@@ -249,5 +271,21 @@ io.on('connection', socket => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, () => console.log(`🎬 Noctiviem backend → http://localhost:${PORT}`));
+// ── Startup (async to wait for DB) ────────────────────────────────────────────
+async function main() {
+  // Load downloads from DB (resumes queued, marks interrupted as error)
+  await dl.init();
+
+  // Load media library from DB
+  const dbMedia = await db.mediaItem.findMany({ orderBy: { createdAt: 'desc' } });
+  mediaLibrary.push(...dbMedia.map(dbRowToMediaItem));
+  console.log(`[db] ${dbMedia.length} media items, ${dl.list().length} downloads loaded`);
+
+  const PORT = process.env.PORT || 3001;
+  httpServer.listen(PORT, () => console.log(`🎬 Noctiviem backend → http://localhost:${PORT}`));
+}
+
+main().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
