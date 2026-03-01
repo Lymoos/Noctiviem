@@ -43,22 +43,33 @@ export interface DownloadItem {
 const downloads = new Map<string, DownloadItem>();
 let broadcastFn: ((items: DownloadItem[]) => void) | null = null;
 
-// ── webtorrent client (lazy-loaded) ──────────────────────────────────────────
+// ── webtorrent client (lazy async ESM load) ──────────────────────────────────
+// webtorrent 2.x is ESM-only. TypeScript compiles `import()` to `require()` in
+// CJS output mode, which fails for ESM packages. `new Function` prevents TS
+// from transforming the expression, so Node.js uses its native ESM loader.
+
+const _importESM = new Function('id', 'return import(id)') as (id: string) => Promise<any>;
 
 let wtClient: any = null;
+let wtInitPromise: Promise<any | null> | null = null;
 
-function getWTClient(): any {
-  if (!wtClient) {
+async function getWTClient(): Promise<any | null> {
+  if (wtClient) return wtClient;
+  if (wtInitPromise) return wtInitPromise;
+  wtInitPromise = (async () => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const WT = require('webtorrent');
+      const mod = await _importESM('webtorrent');
+      const WT = mod.default ?? mod;
       wtClient = new WT({ maxConns: 55 });
       wtClient.on('error', (err: Error) => console.error('[webtorrent]', err.message));
+      return wtClient;
     } catch (e: any) {
       console.error('[webtorrent] Failed to initialize:', e.message);
+      wtInitPromise = null; // allow retry on next call
+      return null;
     }
-  }
-  return wtClient;
+  })();
+  return wtInitPromise;
 }
 
 // ── DB persistence ────────────────────────────────────────────────────────────
@@ -144,7 +155,7 @@ export async function init(): Promise<void> {
     };
     downloads.set(item.id, item);
     // Restart anything that was queued before restart
-    if (row.status === 'queued') startDownload(item.id);
+    if (row.status === 'queued') startDownload(item.id).catch(e => console.error('[dl:init]', e));
   }
 }
 
@@ -170,7 +181,7 @@ export async function add(torrentFilePath: string, displayName: string): Promise
   downloads.set(id, item);
   await saveToDb(item);
   broadcastFn?.(list());
-  startDownload(id);
+  startDownload(id).catch(e => console.error('[dl:add]', e));
   return item;
 }
 
@@ -178,7 +189,7 @@ export async function remove(id: string): Promise<boolean> {
   const item = downloads.get(id);
   if (!item) return false;
   try {
-    const client = getWTClient();
+    const client = await getWTClient();
     if (client && item.infoHash) {
       const t = client.get(item.infoHash);
       if (t) t.destroy();
@@ -191,11 +202,11 @@ export async function remove(id: string): Promise<boolean> {
 
 // ── Download logic ────────────────────────────────────────────────────────────
 
-function startDownload(id: string) {
+async function startDownload(id: string) {
   const item = downloads.get(id);
   if (!item) return;
 
-  const client = getWTClient();
+  const client = await getWTClient();
   if (!client) {
     item.status = 'error';
     item.error = 'WebTorrent failed to initialize. Check server logs.';
