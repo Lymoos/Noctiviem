@@ -16,7 +16,7 @@ if (!localStorage.getItem(USERID_KEY)) localStorage.setItem(USERID_KEY, storedUs
 if (!localStorage.getItem(NICK_KEY)) localStorage.setItem(NICK_KEY, storedNickname);
 
 // ── Fetch helpers ────────────────────────────────────────────────────────────
-function authHeaders() {
+function authHeaders(): Record<string, string> {
   const t = getToken();
   return t ? { Authorization: `Bearer ${t}` } : {};
 }
