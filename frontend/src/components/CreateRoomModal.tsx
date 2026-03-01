@@ -15,7 +15,7 @@ export default function CreateRoomModal({ media, preselectedMediaId, onClose, on
   const { lang } = useStore()
   const t = translations[lang]
   const readyMedia = media.filter(m => m.status === 'ready')
-  const [name, setName] = useState(t.movieNight)
+  const [name, setName] = useState<string>(t.movieNight)
   const [mediaId, setMediaId] = useState(preselectedMediaId || readyMedia[0]?.id || '')
   const [maxParticipants, setMaxParticipants] = useState(20)
 
