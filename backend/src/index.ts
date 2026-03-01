@@ -482,11 +482,12 @@ async function main() {
   mediaLibrary.push(...dbMedia.map(dbRowToMediaItem));
   console.log(`[db] ${dbMedia.length} media items, ${dl.list().length} downloads loaded`);
 
-  // Fix broken paths / remux legacy MKV items
-  await repairMediaLibrary();
-
   const PORT = process.env.PORT || 3001;
-  httpServer.listen(PORT, () => console.log(`🎬 Noctiviem backend → http://localhost:${PORT}`));
+  httpServer.listen(PORT, () => {
+    console.log(`🎬 Noctiviem backend → http://localhost:${PORT}`);
+    // Fix broken paths / remux legacy MKV items in background (non-blocking)
+    repairMediaLibrary().catch(e => console.error('[repair] fatal:', e.message));
+  });
 }
 
 main().catch(err => {
