@@ -12,10 +12,56 @@ import db from './db';
 
 const execFileAsync = promisify(execFile);
 
+// Audio codecs natively supported by all major browsers inside MP4/WebM
+const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis']);
+
+/** Returns true if any audio stream in the file uses a non-browser-safe codec. */
+async function needsAudioFix(filePath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'quiet',
+      '-select_streams', 'a',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'csv=p=0',
+      filePath,
+    ], { timeout: 10000 });
+    const codecs = stdout.trim().split('\n').filter(Boolean);
+    return codecs.length > 0 && codecs.some(c => !BROWSER_SAFE_AUDIO.has(c.trim()));
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Remux a video file to MP4 using ffmpeg stream-copy (no re-encode).
- * Returns the path of the resulting .mp4 file (may differ from inputPath).
- * If the file is already .mp4 or .webm, returns inputPath unchanged.
+ * Transcode all audio streams of an existing MP4 to AAC in-place.
+ * Video and subtitle streams are stream-copied unchanged.
+ */
+async function fixAudioInPlace(mp4Path: string): Promise<void> {
+  const tmpPath = mp4Path + '.__fix.mp4';
+  try {
+    console.log(`[audio-fix] transcoding audio in ${path.basename(mp4Path)} → aac`);
+    await execFileAsync('ffmpeg', [
+      '-i', mp4Path,
+      '-map', '0:v', '-map', '0:a',
+      '-c:v', 'copy',
+      '-c:a', 'aac', '-b:a', '192k',
+      '-movflags', '+faststart',
+      tmpPath,
+    ], { timeout: 60 * 60 * 1000 });
+    fs.renameSync(tmpPath, mp4Path);
+    console.log(`[audio-fix] done ${path.basename(mp4Path)}`);
+  } catch (e) {
+    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    throw e;
+  }
+}
+
+/**
+ * Remux a video file to MP4.
+ * - Copies video stream (no re-encode)
+ * - Transcodes ALL audio streams to AAC (browser-compatible)
+ * - Maps every audio stream so multilingual tracks are preserved
+ * Returns the .mp4 path; if input is already .mp4/.webm, returns it unchanged.
  */
 async function remuxToMp4(inputPath: string): Promise<string> {
   const ext = path.extname(inputPath).toLowerCase();
@@ -25,10 +71,14 @@ async function remuxToMp4(inputPath: string): Promise<string> {
   console.log(`[remux] ${path.basename(inputPath)} → mp4`);
   await execFileAsync('ffmpeg', [
     '-i', inputPath,
-    '-c', 'copy',
+    '-map', '0:v',       // all video streams
+    '-map', '0:a',       // all audio streams
+    '-c:v', 'copy',      // copy video — no quality loss, fast
+    '-c:a', 'aac',       // transcode audio to AAC (browsers support this)
+    '-b:a', '192k',
     '-movflags', '+faststart',
     outputPath,
-  ], { timeout: 10 * 60 * 1000 });
+  ], { timeout: 20 * 60 * 1000 });
   console.log(`[remux] done → ${path.basename(outputPath)}`);
   fs.unlink(inputPath, err => {
     if (err) console.warn(`[remux] could not delete original: ${err.message}`);
@@ -454,6 +504,18 @@ async function repairMediaLibrary() {
       if (mp4 !== filePath) { filePath = mp4; changed = true; }
     } catch (e: any) {
       console.error(`[repair] remux failed for "${item.title}":`, e.message);
+    }
+
+    // Fix incompatible audio (AC3/DTS/TrueHD → AAC) in already-existing MP4 files
+    if (path.extname(filePath).toLowerCase() === '.mp4') {
+      try {
+        if (await needsAudioFix(filePath)) {
+          await fixAudioInPlace(filePath);
+          changed = true;
+        }
+      } catch (e: any) {
+        console.error(`[repair] audio fix failed for "${item.title}":`, e.message);
+      }
     }
 
     if (!changed) continue;
