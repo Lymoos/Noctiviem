@@ -154,6 +154,33 @@ app.delete('/api/media/:id', requireAuth, async (req, res) => {
 // ── Download routes ───────────────────────────────────────────────────────────
 app.get('/api/downloads', requireAuth, (_req, res) => { res.json(dl.list()); });
 
+// Step 1: parse torrent file list without starting download
+app.post('/api/downloads/preview', requireAuth, upload.single('torrent'), async (req, res) => {
+  if (!req.file) { res.status(400).json({ error: 'No .torrent file uploaded' }); return; }
+  try {
+    const result = await dl.preview(req.file.path, req.file.originalname);
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message ?? 'Failed to parse torrent' });
+  }
+});
+
+// Step 2: start downloading selected files from a previewed torrent
+app.post('/api/downloads/confirm', requireAuth, async (req, res) => {
+  const { previewId, selectedIndices } = req.body;
+  if (!previewId || !Array.isArray(selectedIndices)) {
+    res.status(400).json({ error: 'previewId and selectedIndices required' });
+    return;
+  }
+  try {
+    const item = await dl.confirmDownload(previewId, selectedIndices.map(Number));
+    res.json(item);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message ?? 'Failed to start download' });
+  }
+});
+
+// Legacy: start download immediately (kept for backward compat)
 app.post('/api/downloads', requireAuth, upload.single('torrent'), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: 'No .torrent file uploaded' }); return; }
   const item = await dl.add(req.file.path, req.file.originalname);
