@@ -148,7 +148,7 @@ export async function init(): Promise<void> {
       uploadSpeed: 0,
       numPeers: 0,
       eta: -1,
-      files: (row.files as DownloadFile[]) ?? [],
+      files: (row.files as unknown as DownloadFile[]) ?? [],
       createdAt: row.createdAt.getTime(),
       completedAt: row.completedAt?.getTime(),
       mediaIds: (row.mediaIds as string[]) ?? [],
