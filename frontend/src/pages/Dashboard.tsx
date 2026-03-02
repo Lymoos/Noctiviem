@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Library, Clapperboard, Upload, Plus, Film, Users, Zap } from 'lucide-react'
+import { Library, Clapperboard, Upload, Plus, Film, Users, Zap, HardDrive } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import MediaCard from '../components/MediaCard'
 import DownloadingCard from '../components/DownloadingCard'
@@ -10,6 +10,25 @@ import { useStore, apiFetch, apiDelete, apiPost } from '../store'
 import { translations } from '../i18n'
 import { socket, connectSocket } from '../socket'
 import { MediaItem, RoomState, User } from '../types'
+
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`
+  if (b < 1_048_576) return `${(b / 1024).toFixed(1)} KB`
+  if (b < 1_073_741_824) return `${(b / 1_048_576).toFixed(1)} MB`
+  return `${(b / 1_073_741_824).toFixed(2)} GB`
+}
+
+function StorageStat({ bytes }: { bytes: number | null }) {
+  if (bytes === null) return null
+  const color = bytes > 50_000_000_000 ? 'text-red-400' : bytes > 20_000_000_000 ? 'text-yellow-400' : 'text-emerald-400'
+  return (
+    <div className="flex items-center gap-2 text-sm text-slate-500">
+      <HardDrive size={14} className={color} />
+      <span className={color}>{formatBytes(bytes)}</span>
+      <span>на диске</span>
+    </div>
+  )
+}
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -21,6 +40,7 @@ export default function Dashboard() {
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [preselectedMedia, setPreselectedMedia] = useState<string | undefined>()
   const [myRooms, setMyRooms] = useState<{ id: string; name: string; mediaTitle: string; mediaPoster: string; participantCount: number; maxParticipants: number; isPlaying: boolean; isLocked: boolean; isLeader: boolean }[]>([])
+  const [storageBytes, setStorageBytes] = useState<number | null>(null)
 
   useEffect(() => {
     apiFetch<MediaItem[]>('/api/media')
@@ -31,6 +51,13 @@ export default function Dashboard() {
       })
       .catch(() => setLoading(false))
   }, [setMediaLibrary])
+
+  // Storage usage — refresh on mount and whenever media library or downloads change
+  useEffect(() => {
+    apiFetch<{ totalBytes: number }>('/api/storage/stats')
+      .then(s => { if (!s.error) setStorageBytes(s.totalBytes) })
+      .catch(() => {})
+  }, [mediaLibrary.length, downloads.length])
 
   useEffect(() => {
     connectSocket()
@@ -128,7 +155,7 @@ export default function Dashboard() {
           </h1>
           <p className="text-cinema-muted mt-1.5">{t.readyToStart}</p>
 
-          <div className="flex items-center gap-6 mt-5">
+          <div className="flex items-center gap-6 mt-5 flex-wrap">
             <div className="flex items-center gap-2 text-sm text-slate-500">
               <Film size={14} className="text-purple-400" />
               <span>{mediaLibrary.filter(m => m.status === 'ready').length} {t.filmsReady}</span>
@@ -141,6 +168,7 @@ export default function Dashboard() {
               <Zap size={14} className="text-green-400" />
               <span>{t.syncReady}</span>
             </div>
+            <StorageStat bytes={storageBytes} />
           </div>
         </div>
       </div>

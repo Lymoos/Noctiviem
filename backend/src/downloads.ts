@@ -247,9 +247,11 @@ export async function add(torrentFilePath: string, displayName: string): Promise
   return item;
 }
 
-export async function remove(id: string): Promise<boolean> {
+export async function remove(id: string, deleteFiles = false): Promise<boolean> {
   const item = downloads.get(id);
   if (!item) return false;
+
+  // Stop the WebTorrent instance
   try {
     const client = await getWTClient();
     if (client && item.infoHash) {
@@ -257,8 +259,35 @@ export async function remove(id: string): Promise<boolean> {
       if (t) t.destroy();
     }
   } catch {}
+
+  // Delete partial files for active/queued downloads (incomplete = useless bytes).
+  // For completed ones only delete if caller explicitly requests it.
+  const shouldDeleteFiles = deleteFiles || (item.status !== 'completed' && item.status !== 'error');
+  if (shouldDeleteFiles && item.files.length > 0) {
+    for (const f of item.files) {
+      if (!f.path) continue;
+      const filePath = path.join(DOWNLOADS_DIR, f.path);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); }
+        catch (e: any) { console.warn('[dl:remove] could not delete file:', e.message); }
+      }
+    }
+  }
+
+  // Clean up the .torrent file from the uploads dir unless another download uses it
+  if (item.torrentPath && fs.existsSync(item.torrentPath)) {
+    const sharedByOther = Array.from(downloads.values()).some(
+      d => d.id !== id && d.torrentPath === item.torrentPath,
+    );
+    if (!sharedByOther) {
+      try { fs.unlinkSync(item.torrentPath); }
+      catch {}
+    }
+  }
+
   downloads.delete(id);
   await db.download.delete({ where: { id } }).catch(() => {});
+  tryStartNext();
   return true;
 }
 

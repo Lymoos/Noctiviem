@@ -80,10 +80,12 @@ async function remuxToMp4(inputPath: string): Promise<string> {
     outputPath,
   ], { timeout: 20 * 60 * 1000 });
   console.log(`[remux] done → ${path.basename(outputPath)}`);
-  fs.unlink(inputPath, err => {
-    if (err) console.warn(`[remux] could not delete original: ${err.message}`);
-    else console.log(`[remux] deleted original ${path.basename(inputPath)}`);
-  });
+  try {
+    await fs.promises.unlink(inputPath);
+    console.log(`[remux] deleted original ${path.basename(inputPath)}`);
+  } catch (e: any) {
+    console.warn(`[remux] could not delete original: ${e.message}`);
+  }
   return outputPath;
 }
 
@@ -312,6 +314,18 @@ app.get('/api/media/:id', requireAuth, (req, res) => {
 app.delete('/api/media/:id', requireAuth, async (req, res) => {
   const idx = mediaLibrary.findIndex(m => m.id === req.params.id);
   if (idx === -1) { res.status(404).json({ error: 'Not found' }); return; }
+  const item = mediaLibrary[idx];
+
+  // Delete the actual video file from disk to free space
+  if (item.videoUrl.startsWith('/media/')) {
+    const rel = item.videoUrl.slice('/media/'.length).split('/').map(decodeURIComponent).join('/');
+    const filePath = path.join(dl.DOWNLOADS_DIR, rel);
+    if (fs.existsSync(filePath)) {
+      try { await fs.promises.unlink(filePath); console.log(`[delete-media] removed ${path.basename(filePath)}`); }
+      catch (e: any) { console.warn('[delete-media] could not delete file:', e.message); }
+    }
+  }
+
   mediaLibrary.splice(idx, 1);
   await db.mediaItem.delete({ where: { id: req.params.id } }).catch(() => {});
   io.emit('media:updated', mediaLibrary);
@@ -407,6 +421,35 @@ app.patch('/api/downloads/reorder', requireAuth, (req, res) => {
   if (!Array.isArray(ids)) { res.status(400).json({ error: 'ids array required' }); return; }
   dl.reorder(ids as string[]);
   res.json({ success: true });
+});
+
+// ── Storage stats ─────────────────────────────────────────────────────────────
+async function getDirSize(dirPath: string): Promise<{ bytes: number; count: number }> {
+  let bytes = 0, count = 0;
+  try {
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    for (const e of entries) {
+      try {
+        const full = path.join(dirPath, e.name);
+        if (e.isFile()) { bytes += (await fs.promises.stat(full)).size; count++; }
+        else if (e.isDirectory()) { const sub = await getDirSize(full); bytes += sub.bytes; count += sub.count; }
+      } catch {}
+    }
+  } catch {}
+  return { bytes, count };
+}
+
+app.get('/api/storage/stats', requireAuth, async (_req, res) => {
+  const [media, uploads] = await Promise.all([
+    getDirSize(dl.DOWNLOADS_DIR),
+    getDirSize(dl.UPLOADS_DIR),
+  ]);
+  res.json({
+    mediaBytes: media.bytes,
+    mediaCount: media.count,
+    uploadsBytes: uploads.bytes,
+    totalBytes: media.bytes + uploads.bytes,
+  });
 });
 
 // ── User profile ──────────────────────────────────────────────────────────────
