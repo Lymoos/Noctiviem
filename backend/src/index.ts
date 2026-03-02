@@ -452,6 +452,96 @@ app.get('/api/storage/stats', requireAuth, async (_req, res) => {
   });
 });
 
+// ── Admin middleware ───────────────────────────────────────────────────────────
+async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const userId = (req as any).userId as string;
+  const user = await auth.getById(userId);
+  if (!user || !user.isAdmin) { res.status(403).json({ error: 'Forbidden' }); return; }
+  next();
+}
+
+// ── Admin: file system browser ────────────────────────────────────────────────
+
+interface FileEntry {
+  path: string;        // relative to DOWNLOADS_DIR
+  name: string;
+  size: number;
+  isKnown: boolean;    // referenced by a media library entry
+  mediaId?: string;
+  mediaTitle?: string;
+}
+
+async function listFilesRecursive(dir: string, base: string): Promise<FileEntry[]> {
+  const results: FileEntry[] = [];
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return results; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    const rel  = base ? `${base}/${e.name}` : e.name;
+    if (e.isDirectory()) {
+      results.push(...await listFilesRecursive(full, rel));
+    } else if (e.isFile()) {
+      let size = 0;
+      try { size = (await fs.promises.stat(full)).size; } catch {}
+      results.push({ path: rel, name: e.name, size, isKnown: false });
+    }
+  }
+  return results;
+}
+
+app.get('/api/admin/files', requireAuth, requireAdmin, async (_req, res) => {
+  const files = await listFilesRecursive(dl.DOWNLOADS_DIR, '');
+
+  // Mark files that are referenced by the media library
+  for (const f of files) {
+    const encoded = '/media/' + f.path.split('/').map(encodeURIComponent).join('/');
+    const media = mediaLibrary.find(m => m.videoUrl === encoded);
+    if (media) {
+      f.isKnown = true;
+      f.mediaId = media.id;
+      f.mediaTitle = media.title;
+    }
+  }
+
+  // Sort: orphaned first, then by size descending
+  files.sort((a, b) => {
+    if (a.isKnown !== b.isKnown) return a.isKnown ? 1 : -1;
+    return b.size - a.size;
+  });
+
+  res.json({ files, downloadsDir: dl.DOWNLOADS_DIR });
+});
+
+app.delete('/api/admin/files', requireAuth, requireAdmin, async (req, res) => {
+  const { filePath } = req.body as { filePath?: string };
+  if (!filePath) { res.status(400).json({ error: 'filePath required' }); return; }
+
+  // Prevent path traversal
+  const abs = path.resolve(dl.DOWNLOADS_DIR, filePath);
+  if (!abs.startsWith(path.resolve(dl.DOWNLOADS_DIR))) {
+    res.status(400).json({ error: 'Invalid path' }); return;
+  }
+
+  if (!fs.existsSync(abs)) { res.status(404).json({ error: 'File not found' }); return; }
+
+  // Remove from media library if referenced
+  const encoded = '/media/' + filePath.split('/').map(encodeURIComponent).join('/');
+  const mediaIdx = mediaLibrary.findIndex(m => m.videoUrl === encoded);
+  if (mediaIdx !== -1) {
+    const mediaId = mediaLibrary[mediaIdx].id;
+    mediaLibrary.splice(mediaIdx, 1);
+    await db.mediaItem.delete({ where: { id: mediaId } }).catch(() => {});
+    io.emit('media:updated', mediaLibrary);
+  }
+
+  try {
+    await fs.promises.unlink(abs);
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── User profile ──────────────────────────────────────────────────────────────
 app.get('/api/users/:id/profile', requireAuth, async (req, res) => {
   const requesterId = (req as any).userId as string;

@@ -5,6 +5,15 @@ import { v4 as uuidv4 } from 'uuid';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'noctiviem_dev_secret_change_in_prod';
 
+// ── Admin usernames (comma-separated env var, e.g. ADMIN_USERNAMES=lymoos) ────
+const ADMIN_USERNAMES = new Set(
+  (process.env.ADMIN_USERNAMES ?? 'lymoos').split(',').map(u => u.trim().toLowerCase()).filter(Boolean)
+);
+
+export function isAdminUsername(username: string): boolean {
+  return ADMIN_USERNAMES.has(username.trim().toLowerCase());
+}
+
 // ── Public shape returned to clients (no passwordHash) ───────────────────────
 
 export interface PublicUser {
@@ -12,6 +21,7 @@ export interface PublicUser {
   username: string;
   email: string;
   createdAt: number;
+  isAdmin: boolean;
   settings: {
     nickname: string;
     avatarSeed: string;
@@ -49,6 +59,7 @@ function toPublic(u: DbUser): PublicUser {
     username: u.username,
     email: u.email,
     createdAt: u.createdAt.getTime(),
+    isAdmin: isAdminUsername(u.username),
     settings: {
       nickname: u.nickname,
       avatarSeed: u.avatarSeed,

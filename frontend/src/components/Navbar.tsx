@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Search, Plus, Download, Upload, Settings, LogOut, Film } from 'lucide-react'
+import { Search, Plus, Download, Upload, Settings, LogOut, Film, Shield } from 'lucide-react'
 import { useStore } from '../store'
 import { translations } from '../i18n'
 import ImportModal from './ImportModal'
@@ -124,6 +124,16 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
                   <Settings size={13} />
                   {t.settings}
                 </Link>
+                {account?.isAdmin && (
+                  <Link
+                    to="/admin"
+                    onClick={() => setProfileOpen(false)}
+                    className="flex items-center gap-2.5 px-3 py-2 text-sm text-red-400/70 hover:text-red-400 hover:bg-red-900/10 rounded-lg transition-colors"
+                  >
+                    <Shield size={13} />
+                    Admin Panel
+                  </Link>
+                )}
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-cinema-muted hover:text-red-400 hover:bg-red-900/10 rounded-lg transition-colors"
