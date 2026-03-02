@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { RoomState, User, Message, Reaction, MediaItem, Account, DownloadItem } from './types';
 import { Lang } from './i18n';
+import { randomUUID } from './utils';
 
 // ── Token helpers ────────────────────────────────────────────────────────────
 const TOKEN_KEY = 'noctiviem_token';
@@ -18,7 +19,7 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
-const storedUserId = localStorage.getItem(USERID_KEY) || crypto.randomUUID();
+const storedUserId = localStorage.getItem(USERID_KEY) || randomUUID();
 const storedNickname = localStorage.getItem(NICK_KEY) || `Viewer_${storedUserId.slice(0, 4).toUpperCase()}`;
 if (!localStorage.getItem(USERID_KEY)) localStorage.setItem(USERID_KEY, storedUserId);
 if (!localStorage.getItem(NICK_KEY)) localStorage.setItem(NICK_KEY, storedNickname);

@@ -1,10 +1,11 @@
 import { io, Socket } from 'socket.io-client';
+import { randomUUID } from './utils';
 
 let userId = localStorage.getItem('noctiviem_userId');
 let nickname = localStorage.getItem('noctiviem_nickname');
 
 if (!userId) {
-  userId = crypto.randomUUID();
+  userId = randomUUID();
   localStorage.setItem('noctiviem_userId', userId);
 }
 
