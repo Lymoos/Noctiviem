@@ -76,46 +76,50 @@ export default function CinemaHall({
   }
 
   return (
-    <div className="relative">
-      {/* Screen glow reflection */}
-      <div className="h-1 mx-12 rounded-full mb-3"
-        style={{ background: 'linear-gradient(90deg, transparent, rgba(124,58,237,0.3), rgba(59,130,246,0.3), transparent)' }}
-      />
+    <div className="relative px-4 pt-2 pb-6">
 
-      {/* Hall container */}
-      <div className="glass rounded-2xl p-5 relative overflow-hidden"
-        style={{ background: 'rgba(10,12,16,0.6)' }}>
+      {/* Floating reactions */}
+      {floatingReactions.map(fr => {
+        const p = participants.find(p => p.id === fr.userId)
+        if (!p) return null
+        const seatCol = (p.seatNumber - 1) % SEATS_PER_ROW
+        const leftPercent = (seatCol / (SEATS_PER_ROW - 1)) * 70 + 15
+        return (
+          <div
+            key={fr.id}
+            className="floating-reaction"
+            style={{ left: `${leftPercent}%`, bottom: '100px' }}
+          >
+            {fr.emoji}
+          </div>
+        )
+      })}
 
-        {/* Ambient lighting from screen */}
-        <div className="absolute top-0 left-0 right-0 h-8 pointer-events-none"
-          style={{ background: 'linear-gradient(to bottom, rgba(124,58,237,0.08), transparent)' }}
-        />
+      {/* Seats — perspective effect: back rows narrower + dimmer, front rows wider + brighter */}
+      <div className="flex flex-col items-center" style={{ gap: 0 }}>
+        {Array.from({ length: MAX_ROWS }, (_, rowIdx) => {
+          // Row 0 = back (narrow, dim), Row MAX_ROWS-1 = front (wide, bright)
+          const t = rowIdx / (MAX_ROWS - 1)                          // 0 → 1
+          const scaleX   = 0.78 + t * 0.22                           // 0.78 → 1.0
+          const opacity  = 0.55 + t * 0.45                           // 0.55 → 1.0
+          const marginTop = rowIdx === 0 ? 0 : 6 + rowIdx * 5        // increasing gap
 
-        {/* Floating reactions */}
-        {floatingReactions.map(fr => {
-          const p = participants.find(p => p.id === fr.userId)
-          if (!p) return null
-          const seatCol = (p.seatNumber - 1) % SEATS_PER_ROW
-          const leftPercent = (seatCol / (SEATS_PER_ROW - 1)) * 80 + 10
           return (
             <div
-              key={fr.id}
-              className="floating-reaction"
-              style={{ left: `${leftPercent}%`, bottom: '60px' }}
+              key={rowIdx}
+              className="flex items-end justify-center gap-2"
+              style={{
+                transform: `scaleX(${scaleX})`,
+                opacity,
+                transformOrigin: 'center center',
+                marginTop,
+                transition: 'transform 0.4s ease, opacity 0.4s ease',
+              }}
             >
-              {fr.emoji}
-            </div>
-          )
-        })}
+              <span className="text-xs text-slate-700 w-4 flex-shrink-0 text-right select-none">
+                {rowIdx + 1}
+              </span>
 
-        {/* Seats grid */}
-        <div className="space-y-3">
-          {Array.from({ length: MAX_ROWS }, (_, rowIdx) => (
-            <div key={rowIdx} className="flex items-end justify-center gap-2">
-              {/* Row number */}
-              <span className="text-xs text-slate-700 w-4 flex-shrink-0 text-right">{rowIdx + 1}</span>
-
-              {/* Seats */}
               {seats.slice(rowIdx * SEATS_PER_ROW, (rowIdx + 1) * SEATS_PER_ROW).map(({ seatNum, participant }) => (
                 <SeatItem
                   key={seatNum}
@@ -133,16 +137,18 @@ export default function CinemaHall({
                 />
               ))}
 
-              <span className="text-xs text-slate-700 w-4 flex-shrink-0">{rowIdx + 1}</span>
+              <span className="text-xs text-slate-700 w-4 flex-shrink-0 select-none">
+                {rowIdx + 1}
+              </span>
             </div>
-          ))}
-        </div>
+          )
+        })}
+      </div>
 
-        {/* Reactions bar */}
-        {reactionsEnabled && (
-          <div className="flex items-center justify-center gap-2 mt-5 pt-4"
-            style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-            {REACTION_EMOJIS.map(emoji => (
+      {/* Reactions bar */}
+      <div className="flex items-center justify-center gap-3 mt-6">
+        {reactionsEnabled
+          ? REACTION_EMOJIS.map(emoji => (
               <button
                 key={emoji}
                 onClick={() => sendReaction(emoji)}
@@ -151,16 +157,9 @@ export default function CinemaHall({
               >
                 {emoji}
               </button>
-            ))}
-          </div>
-        )}
-
-        {!reactionsEnabled && (
-          <div className="text-center text-xs text-slate-600 mt-4 pt-3"
-            style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-            Reactions disabled by Leader
-          </div>
-        )}
+            ))
+          : <span className="text-xs text-slate-700">Reactions disabled by Leader</span>
+        }
       </div>
 
       {/* Whisper modal */}

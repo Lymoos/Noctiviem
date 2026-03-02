@@ -344,15 +344,18 @@ export default function Room() {
 
       {/* ── MAIN AREA ────────────────────────────────────────────────────────── */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left: Video + Hall */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
-          {/* Video — shrinks to fit available height */}
-          <div className="p-3 pb-0 flex-shrink-0">
-            {/* Ambient glow backdrop */}
-            <div className="relative">
-              <div className="absolute -inset-4 rounded-2xl blur-2xl opacity-30 pointer-events-none"
-                style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(59,130,246,0.2))' }}
-              />
+
+        {/* Left: Cinema stage */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden cinema-room-stage">
+
+          {/* ── Screen section ── */}
+          <div className="flex-shrink-0 flex justify-center relative cinema-screen-enter px-0 pt-5">
+            {/* Curtain decorations flanking the screen */}
+            <div className="cinema-curtain-l" />
+            <div className="cinema-curtain-r" />
+
+            {/* Cinema screen frame */}
+            <div className="cinema-screen-frame" style={{ width: '72%' }}>
               <VideoPlayer
                 media={media}
                 serverTime={room.currentTime}
@@ -362,8 +365,14 @@ export default function Room() {
             </div>
           </div>
 
-          {/* Cinema Hall — takes remaining space, scrolls internally if packed */}
-          <div className="p-3 flex-1 overflow-y-auto min-h-0">
+          {/* Stage edge — glowing divider between screen and seats */}
+          <div className="stage-edge" />
+
+          {/* Screen ambient spill onto "floor" */}
+          <div className="screen-floor-glow" />
+
+          {/* ── Seats ── */}
+          <div className="flex-1 overflow-y-auto min-h-0 cinema-hall-enter">
             <CinemaHall
               participants={room.participants}
               leaderId={room.leaderId}
