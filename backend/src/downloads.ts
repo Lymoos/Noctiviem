@@ -76,6 +76,8 @@ async function getWTClient(): Promise<any | null> {
 // ── DB persistence ────────────────────────────────────────────────────────────
 
 async function saveToDb(item: DownloadItem): Promise<void> {
+  // Prisma Float rejects Infinity/NaN — clamp eta to -1 in those cases
+  const safeEta = Number.isFinite(item.eta) ? item.eta : -1;
   await db.download.upsert({
     where: { id: item.id },
     update: {
@@ -88,7 +90,7 @@ async function saveToDb(item: DownloadItem): Promise<void> {
       downloadSpeed: item.downloadSpeed,
       uploadSpeed: item.uploadSpeed,
       numPeers: item.numPeers,
-      eta: item.eta,
+      eta: safeEta,
       files: item.files as any,
       error: item.error ?? null,
       mediaIds: item.mediaIds as any,
@@ -106,7 +108,7 @@ async function saveToDb(item: DownloadItem): Promise<void> {
       downloadSpeed: item.downloadSpeed,
       uploadSpeed: item.uploadSpeed,
       numPeers: item.numPeers,
-      eta: item.eta,
+      eta: safeEta,
       files: item.files as any,
       error: item.error ?? null,
       mediaIds: item.mediaIds as any,
