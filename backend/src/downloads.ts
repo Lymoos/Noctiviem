@@ -39,10 +39,39 @@ export interface DownloadItem {
   createdAt: number;
   completedAt?: number;
   mediaIds: string[];
+  sortOrder: number;      // lower = higher priority in queue
 }
+
+// Max simultaneous WebTorrent downloads (env: MAX_CONCURRENT_DL, default 2)
+const MAX_CONCURRENT_DL = Math.max(1, parseInt(process.env.MAX_CONCURRENT_DL ?? '2', 10));
 
 const downloads = new Map<string, DownloadItem>();
 let broadcastFn: ((items: DownloadItem[]) => void) | null = null;
+
+// Count currently active (metadata + downloading) downloads
+function activeCount(): number {
+  let n = 0;
+  for (const d of downloads.values()) {
+    if (d.status === 'downloading' || d.status === 'metadata') n++;
+  }
+  return n;
+}
+
+// Next sortOrder value: max existing + 1
+function nextSortOrder(): number {
+  let max = -1;
+  for (const d of downloads.values()) if (d.sortOrder > max) max = d.sortOrder;
+  return max + 1;
+}
+
+// Start the next queued download if a slot is free
+function tryStartNext(): void {
+  if (activeCount() >= MAX_CONCURRENT_DL) return;
+  const next = Array.from(downloads.values())
+    .filter(d => d.status === 'queued')
+    .sort((a, b) => a.sortOrder - b.sortOrder)[0];
+  if (next) startDownload(next.id).catch(e => console.error('[dl:next]', e));
+}
 
 // ── webtorrent client (lazy async ESM load) ──────────────────────────────────
 // webtorrent 2.x is ESM-only. TypeScript compiles `import()` to `require()` in
@@ -94,6 +123,7 @@ async function saveToDb(item: DownloadItem): Promise<void> {
       files: item.files as any,
       error: item.error ?? null,
       mediaIds: item.mediaIds as any,
+      sortOrder: item.sortOrder,
       completedAt: item.completedAt ? new Date(item.completedAt) : null,
     },
     create: {
@@ -112,6 +142,7 @@ async function saveToDb(item: DownloadItem): Promise<void> {
       files: item.files as any,
       error: item.error ?? null,
       mediaIds: item.mediaIds as any,
+      sortOrder: item.sortOrder,
       createdAt: new Date(item.createdAt),
       completedAt: item.completedAt ? new Date(item.completedAt) : null,
     },
@@ -125,7 +156,21 @@ export function setBroadcast(fn: (items: DownloadItem[]) => void) {
 }
 
 export function list(): DownloadItem[] {
-  return Array.from(downloads.values()).sort((a, b) => b.createdAt - a.createdAt);
+  return Array.from(downloads.values()).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+/** Reassign sortOrder by the provided ID array (index = new order position). */
+export function reorder(ids: string[]): void {
+  ids.forEach((id, idx) => {
+    const d = downloads.get(id);
+    if (d) d.sortOrder = idx;
+  });
+  // Persist updated sortOrders asynchronously
+  for (const id of ids) {
+    const d = downloads.get(id);
+    if (d) saveToDb(d).catch(() => {});
+  }
+  broadcastFn?.(list());
 }
 
 export function get(id: string): DownloadItem | undefined {
@@ -134,7 +179,7 @@ export function get(id: string): DownloadItem | undefined {
 
 /** Load persisted downloads from DB on server startup */
 export async function init(): Promise<void> {
-  const rows = await db.download.findMany({ orderBy: { createdAt: 'desc' } });
+  const rows = await db.download.findMany({ orderBy: { sortOrder: 'asc' } });
   for (const row of rows) {
     const wasActive = row.status === 'downloading' || row.status === 'metadata';
     const item: DownloadItem = {
@@ -155,10 +200,20 @@ export async function init(): Promise<void> {
       createdAt: row.createdAt.getTime(),
       completedAt: row.completedAt?.getTime(),
       mediaIds: (row.mediaIds as string[]) ?? [],
+      sortOrder: (row as any).sortOrder ?? row.createdAt.getTime(),
     };
     downloads.set(item.id, item);
-    // Restart anything that was queued before restart
-    if (row.status === 'queued') startDownload(item.id).catch(e => console.error('[dl:init]', e));
+  }
+  // Restart queued downloads respecting concurrent limit (in priority order)
+  const queued = Array.from(downloads.values())
+    .filter(d => d.status === 'queued')
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  for (const d of queued) {
+    if (activeCount() < MAX_CONCURRENT_DL) {
+      startDownload(d.id).catch(e => console.error('[dl:init]', e));
+    } else {
+      break;
+    }
   }
 }
 
@@ -180,11 +235,15 @@ export async function add(torrentFilePath: string, displayName: string): Promise
     files: [],
     createdAt: Date.now(),
     mediaIds: [],
+    sortOrder: nextSortOrder(),
   };
   downloads.set(id, item);
   await saveToDb(item);
   broadcastFn?.(list());
-  startDownload(id).catch(e => console.error('[dl:add]', e));
+  // Only start immediately if under the concurrent download limit
+  if (activeCount() < MAX_CONCURRENT_DL) {
+    startDownload(id).catch(e => console.error('[dl:add]', e));
+  }
   return item;
 }
 
@@ -284,6 +343,7 @@ async function startDownload(id: string) {
       saveToDb(d).catch(() => {});
       broadcastFn?.(list());
       onCompletedFn?.(d);
+      tryStartNext();
     });
 
     torrent.on('error', (err: Error) => {
@@ -294,6 +354,7 @@ async function startDownload(id: string) {
       d.error = err.message;
       saveToDb(d).catch(() => {});
       broadcastFn?.(list());
+      tryStartNext();
     });
 
   } catch (err: any) {
@@ -301,6 +362,7 @@ async function startDownload(id: string) {
     item.error = err.message ?? 'Unknown error';
     saveToDb(item).catch(() => {});
     broadcastFn?.(list());
+    tryStartNext();
   }
 }
 
@@ -355,6 +417,7 @@ export async function preview(
     progress: 0, downloaded: 0, total: 0,
     downloadSpeed: 0, uploadSpeed: 0, numPeers: 0, eta: -1,
     files: [], createdAt: Date.now(), mediaIds: [],
+    sortOrder: 0,
   };
 
   return new Promise((resolve, reject) => {
@@ -446,6 +509,7 @@ export async function confirmDownload(
   }
 
   item.status = 'downloading';
+  item.sortOrder = nextSortOrder();
   downloads.set(item.id, item);
   await saveToDb(item);
   broadcastFn?.(list());
@@ -489,6 +553,7 @@ export async function confirmDownload(
     saveToDb(d).catch(() => {});
     broadcastFn?.(list());
     onCompletedFn?.(d);
+    tryStartNext();
   });
 
   torrent.on('error', (err: Error) => {
@@ -498,6 +563,7 @@ export async function confirmDownload(
     d.status = 'error'; d.error = err.message;
     saveToDb(d).catch(() => {});
     broadcastFn?.(list());
+    tryStartNext();
   });
 
   return item;

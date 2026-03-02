@@ -402,6 +402,13 @@ app.delete('/api/downloads/:id', requireAuth, async (req, res) => {
   res.json({ success: await dl.remove(req.params.id) });
 });
 
+app.patch('/api/downloads/reorder', requireAuth, (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids)) { res.status(400).json({ error: 'ids array required' }); return; }
+  dl.reorder(ids as string[]);
+  res.json({ success: true });
+});
+
 // ── User profile ──────────────────────────────────────────────────────────────
 app.get('/api/users/:id/profile', requireAuth, async (req, res) => {
   const requesterId = (req as any).userId as string;

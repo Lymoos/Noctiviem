@@ -89,6 +89,7 @@ model Download {
   files         Json      @default("[]")
   error         String?
   mediaIds      Json      @default("[]")
+  sortOrder     Int       @default(0)
   createdAt     DateTime  @default(now())
   completedAt   DateTime?
 

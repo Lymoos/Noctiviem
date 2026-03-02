@@ -133,6 +133,7 @@ export interface DownloadItem {
   createdAt: number;
   completedAt?: number;
   mediaIds: string[];
+  sortOrder: number;
 }
 
 export interface ActiveBubble {

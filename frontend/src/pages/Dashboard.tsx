@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Library, Download, Clapperboard, Upload, Plus, Film, Users, Zap } from 'lucide-react'
+import { Library, Clapperboard, Upload, Plus, Film, Users, Zap } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import MediaCard from '../components/MediaCard'
+import DownloadingCard from '../components/DownloadingCard'
 import RoomCard from '../components/RoomCard'
 import CreateRoomModal from '../components/CreateRoomModal'
 import { useStore, apiFetch, apiDelete, apiPost } from '../store'
@@ -12,7 +13,7 @@ import { MediaItem, RoomState, User } from '../types'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { setMediaLibrary, mediaLibrary, setRoom, setCurrentUser, nickname, toggleDownloads, lang } = useStore()
+  const { setMediaLibrary, mediaLibrary, downloads, setRoom, setCurrentUser, nickname, toggleDownloads, lang } = useStore()
   const t = translations[lang]
   const [loading, setLoading] = useState(true)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -90,6 +91,12 @@ export default function Dashboard() {
   const readyMedia = filtered.filter(m => m.status === 'ready')
   const processingMedia = filtered.filter(m => m.status !== 'ready')
 
+  // Active downloads that don't yet have a media entry — shown as "in-coming" cards
+  const downloadingItems = downloads.filter(d =>
+    (d.status === 'queued' || d.status === 'metadata' || d.status === 'downloading') &&
+    d.mediaIds.length === 0
+  )
+
   return (
     <div className="min-h-screen bg-cinema-bg">
       <Navbar
@@ -146,7 +153,14 @@ export default function Dashboard() {
             <h2 className="section-title">{t.myMediaLibrary}</h2>
             <div className="section-line" />
             {!loading && (
-              <span className="text-xs text-slate-500">{readyMedia.length} {t.filmsCount}</span>
+              <span className="text-xs text-slate-500">
+                {readyMedia.length} {t.filmsCount}
+                {(processingMedia.length + downloadingItems.length) > 0 && (
+                  <span className="text-purple-400 ml-2">
+                    +{processingMedia.length + downloadingItems.length} загружается
+                  </span>
+                )}
+              </span>
             )}
           </div>
 
@@ -156,7 +170,7 @@ export default function Dashboard() {
                 <div key={i} className="aspect-[2/3] rounded-xl bg-cinema-card animate-pulse" />
               ))}
             </div>
-          ) : readyMedia.length === 0 ? (
+          ) : readyMedia.length === 0 && processingMedia.length === 0 && downloadingItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="w-16 h-16 rounded-2xl accent-gradient flex items-center justify-center mb-4 opacity-30">
                 <Film size={28} className="text-white" />
@@ -170,6 +184,15 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+              {/* Downloading items first (in-progress, sorted by queue order) */}
+              {downloadingItems.map(item => (
+                <DownloadingCard key={item.id} item={item} />
+              ))}
+              {/* Processing (remuxing/converting) */}
+              {processingMedia.map(item => (
+                <MediaCard key={item.id} item={item} />
+              ))}
+              {/* Ready to watch */}
               {readyMedia.map(item => (
                 <MediaCard
                   key={item.id}
@@ -183,23 +206,6 @@ export default function Dashboard() {
             </div>
           )}
         </section>
-
-        {/* ── DOWNLOADING / PROCESSING ── */}
-        {processingMedia.length > 0 && (
-          <section>
-            <div className="section-header">
-              <Download size={16} className="text-blue-400" />
-              <h2 className="section-title">{t.processing}</h2>
-              <div className="section-line" />
-              <span className="text-xs text-slate-500">{processingMedia.length} {t.filesCount}</span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
-              {processingMedia.map(item => (
-                <MediaCard key={item.id} item={item} />
-              ))}
-            </div>
-          </section>
-        )}
 
         {/* ── MY HALLS ── */}
         <section>
