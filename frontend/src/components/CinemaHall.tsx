@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Crown, Mic, MicOff } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Crown } from 'lucide-react'
 import { User, FloatingReaction } from '../types'
 import { socket } from '../socket'
 import { useStore, selectIsLeader } from '../store'
+import ProfileModal from './ProfileModal'
 
 interface CinemaHallProps {
   participants: User[]
@@ -33,6 +34,7 @@ export default function CinemaHall({
   const [whisperTarget, setWhisperTarget] = useState<User | null>(null)
   const [whisperText, setWhisperText] = useState('')
   const [waveActive, setWaveActive] = useState(false)
+  const [profileUserId, setProfileUserId] = useState<string | null>(null)
 
   const totalSeats = MAX_ROWS * SEATS_PER_ROW
   const seats = Array.from({ length: totalSeats }, (_, i) => {
@@ -73,6 +75,11 @@ export default function CinemaHall({
     if (confirm('Remove this viewer from the hall?')) {
       socket.emit('room:kick', { targetUserId: userId })
     }
+  }
+
+  const handleTransferLeader = (userId: string) => {
+    if (!isLeader) return
+    socket.emit('room:transfer_leader', { targetUserId: userId })
   }
 
   return (
@@ -133,6 +140,7 @@ export default function CinemaHall({
                   waveActive={waveActive}
                   onWhisper={p => p.id !== currentUserId && setWhisperTarget(p)}
                   onKick={handleKick}
+                  onProfile={p => setProfileUserId(p.id)}
                   rowIndex={rowIdx}
                 />
               ))}
@@ -161,6 +169,17 @@ export default function CinemaHall({
           : <span className="text-xs text-slate-700">Reactions disabled by Leader</span>
         }
       </div>
+
+      {/* Profile modal */}
+      {profileUserId && (
+        <ProfileModal
+          userId={profileUserId}
+          isLeader={isLeader}
+          currentUserId={currentUserId}
+          onClose={() => setProfileUserId(null)}
+          onTransferLeader={() => handleTransferLeader(profileUserId)}
+        />
+      )}
 
       {/* Whisper modal */}
       {whisperTarget && (
@@ -205,12 +224,13 @@ interface SeatItemProps {
   waveActive: boolean
   onWhisper: (p: User) => void
   onKick: (userId: string) => void
+  onProfile: (p: User) => void
   rowIndex: number
 }
 
 function SeatItem({
   seatNum, participant, leaderId, currentUserId, isLeader,
-  chatEnabled, bubble, waveActive, onWhisper, onKick, rowIndex,
+  chatEnabled, bubble, waveActive, onWhisper, onKick, onProfile, rowIndex,
 }: SeatItemProps) {
   const isOccupied = !!participant
   const isThisLeader = participant?.id === leaderId
@@ -237,7 +257,7 @@ function SeatItem({
       {participant && (
         <div
           className={`relative mb-1 cursor-pointer ${isCurrentUser ? 'ring-2 ring-purple-500 rounded-full' : ''}`}
-          onClick={() => !isCurrentUser && setShowMenu(!showMenu)}
+          onClick={() => onProfile(participant)}
         >
           <img
             src={participant.avatar}
@@ -291,6 +311,12 @@ function SeatItem({
             <div className="px-3 py-2 border-b border-white/5">
               <div className="text-xs font-medium text-cinema-text">{participant.nickname}</div>
               {isThisLeader && <div className="text-xs text-yellow-400">👑 Leader</div>}
+            </div>
+            <div
+              onClick={() => { onProfile(participant); setShowMenu(false) }}
+              className="menu-item"
+            >
+              👤 View profile
             </div>
             <div
               onClick={() => { onWhisper(participant); setShowMenu(false) }}

@@ -8,20 +8,50 @@ datasource db {
 }
 
 model User {
-  id                     String   @id @default(uuid())
-  username               String   @unique
-  email                  String   @unique
+  id                     String         @id @default(uuid())
+  username               String         @unique
+  email                  String         @unique
   passwordHash           String
   nickname               String
-  avatarSeed             String   @default("")
-  defaultQuality         String   @default("Auto")
-  defaultAudioLang       String   @default("und")
-  defaultSubsLang        String   @default("off")
-  maxConcurrentDownloads Int      @default(2)
-  autoSyncOnJoin         Boolean  @default(true)
-  createdAt              DateTime @default(now())
+  avatarSeed             String         @default("")
+  defaultQuality         String         @default("Auto")
+  defaultAudioLang       String         @default("und")
+  defaultSubsLang        String         @default("off")
+  maxConcurrentDownloads Int            @default(2)
+  autoSyncOnJoin         Boolean        @default(true)
+  isPrivate              Boolean        @default(false)
+  createdAt              DateTime       @default(now())
+
+  watchHistory           WatchHistory[]
+  friendsAdded           Friendship[]   @relation("FriendshipRequester")
+  friendsReceived        Friendship[]   @relation("FriendshipAddressee")
 
   @@map("users")
+}
+
+model WatchHistory {
+  id         String   @id @default(uuid())
+  userId     String
+  mediaTitle String
+  roomName   String
+  watchedAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("watch_history")
+}
+
+model Friendship {
+  id           String   @id @default(uuid())
+  requesterId  String
+  addresseeId  String
+  createdAt    DateTime @default(now())
+
+  requester    User     @relation("FriendshipRequester",  fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee    User     @relation("FriendshipAddressee",  fields: [addresseeId],  references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+  @@map("friendships")
 }
 
 model MediaItem {

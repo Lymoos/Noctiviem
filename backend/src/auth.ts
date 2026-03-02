@@ -20,14 +20,27 @@ export interface PublicUser {
     defaultSubsLang: string;
     maxConcurrentDownloads: number;
     autoSyncOnJoin: boolean;
+    isPrivate: boolean;
   };
+}
+
+export interface UserProfile {
+  id: string;
+  username: string;
+  nickname: string;
+  avatarSeed: string;
+  createdAt: number;
+  isPrivate: boolean;
+  watchHistory?: { mediaTitle: string; roomName: string; watchedAt: number }[];
+  friends?: { id: string; nickname: string; avatarSeed: string }[];
 }
 
 type DbUser = {
   id: string; username: string; email: string; passwordHash: string;
   nickname: string; avatarSeed: string; defaultQuality: string;
   defaultAudioLang: string; defaultSubsLang: string;
-  maxConcurrentDownloads: number; autoSyncOnJoin: boolean; createdAt: Date;
+  maxConcurrentDownloads: number; autoSyncOnJoin: boolean;
+  isPrivate: boolean; createdAt: Date;
 };
 
 function toPublic(u: DbUser): PublicUser {
@@ -44,6 +57,7 @@ function toPublic(u: DbUser): PublicUser {
       defaultSubsLang: u.defaultSubsLang,
       maxConcurrentDownloads: u.maxConcurrentDownloads,
       autoSyncOnJoin: u.autoSyncOnJoin,
+      isPrivate: u.isPrivate,
     },
   };
 }
@@ -120,6 +134,7 @@ export async function updateSettings(
     defaultSubsLang?: string;
     maxConcurrentDownloads?: number;
     autoSyncOnJoin?: boolean;
+    isPrivate?: boolean;
     currentPassword?: string;
     newPassword?: string;
   },
@@ -155,9 +170,84 @@ export async function updateSettings(
   if (body.defaultSubsLang !== undefined) data.defaultSubsLang = body.defaultSubsLang;
   if (body.maxConcurrentDownloads !== undefined) data.maxConcurrentDownloads = body.maxConcurrentDownloads;
   if (body.autoSyncOnJoin !== undefined) data.autoSyncOnJoin = body.autoSyncOnJoin;
+  if (body.isPrivate !== undefined) data.isPrivate = body.isPrivate;
 
   const updated = await db.user.update({ where: { id: userId }, data });
   return { user: toPublic(updated) };
+}
+
+export async function getProfile(
+  targetId: string,
+  requesterId: string,
+): Promise<UserProfile | null> {
+  const u = await db.user.findUnique({
+    where: { id: targetId },
+    include: {
+      watchHistory: { orderBy: { watchedAt: 'desc' }, take: 15 },
+      friendsAdded: { include: { addressee: { select: { id: true, nickname: true, avatarSeed: true } } } },
+      friendsReceived: { include: { requester: { select: { id: true, nickname: true, avatarSeed: true } } } },
+    },
+  });
+  if (!u) return null;
+
+  const isSelf = targetId === requesterId;
+  const showPrivate = isSelf || !u.isPrivate;
+
+  const profile: UserProfile = {
+    id: u.id,
+    username: u.username,
+    nickname: u.nickname,
+    avatarSeed: u.avatarSeed,
+    createdAt: u.createdAt.getTime(),
+    isPrivate: u.isPrivate,
+  };
+
+  if (showPrivate) {
+    profile.watchHistory = (u.watchHistory as any[]).map((w: any) => ({
+      mediaTitle: w.mediaTitle as string,
+      roomName: w.roomName as string,
+      watchedAt: (w.watchedAt as Date).getTime(),
+    }));
+    const friendsFrom = (u.friendsAdded as any[]).map((f: any) => f.addressee as { id: string; nickname: string; avatarSeed: string });
+    const friendsTo = (u.friendsReceived as any[]).map((f: any) => f.requester as { id: string; nickname: string; avatarSeed: string });
+    profile.friends = [...friendsFrom, ...friendsTo];
+  }
+
+  return profile;
+}
+
+export async function addFriend(requesterId: string, addresseeId: string): Promise<boolean> {
+  if (requesterId === addresseeId) return false;
+  try {
+    await db.friendship.upsert({
+      where: { requesterId_addresseeId: { requesterId, addresseeId } },
+      create: { requesterId, addresseeId },
+      update: {},
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function removeFriend(requesterId: string, addresseeId: string): Promise<boolean> {
+  try {
+    await db.friendship.deleteMany({
+      where: {
+        OR: [
+          { requesterId, addresseeId },
+          { requesterId: addresseeId, addresseeId: requesterId },
+        ],
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function recordWatch(userId: string, mediaTitle: string, roomName: string): Promise<void> {
+  await db.watchHistory.create({ data: { userId, mediaTitle, roomName } });
 }
 
 export async function deleteAccount(userId: string): Promise<boolean> {

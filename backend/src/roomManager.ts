@@ -196,6 +196,22 @@ export function updateRoomSettings(
   Object.assign(room, update, { updatedAt: Date.now() });
 }
 
+export function transferLeader(roomId: string, fromUserId: string, toUserId: string): RoomState | undefined {
+  const room = rooms.get(roomId);
+  if (!room || room.leaderId !== fromUserId) return undefined;
+  const target = room.participants.find(p => p.id === toUserId);
+  if (!target) return undefined;
+  // Demote current leader
+  const current = room.participants.find(p => p.id === fromUserId);
+  if (current) current.isLeader = false;
+  // Promote target
+  target.isLeader = true;
+  room.leaderId = toUserId;
+  room.leaderSocketId = target.socketId;
+  room.updatedAt = Date.now();
+  return room;
+}
+
 export function deleteMessage(roomId: string, messageId: string): boolean {
   const room = rooms.get(roomId);
   if (!room) return false;

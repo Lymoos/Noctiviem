@@ -178,10 +178,11 @@ export default function Room() {
     }
   }, [userId, addMessage, addParticipant, addReaction, clearRoom, deleteMessage, navigate, updateParticipants, updateRoomSettings, updateRoomSync])
 
-  // Leave room on unmount
+  // Leave room on unmount — only called on explicit navigation, NOT on F5
+  // F5 triggers a socket disconnect; the server has a grace period before
+  // removing the user, so the leader stays until they actually leave.
   useEffect(() => {
     return () => {
-      socket.emit('room:leave')
       clearRoom()
     }
   }, [clearRoom])

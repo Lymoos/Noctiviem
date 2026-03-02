@@ -82,6 +82,7 @@ export default function Settings() {
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [showNewPw, setShowNewPw] = useState(false)
+  const [isPrivate, setIsPrivate] = useState(account?.settings.isPrivate ?? false)
 
   const [defaultQuality, setDefaultQuality] = useState(account?.settings.defaultQuality ?? 'Auto')
   const [defaultAudioLang, setDefaultAudioLang] = useState(account?.settings.defaultAudioLang ?? 'und')
@@ -99,7 +100,7 @@ export default function Settings() {
     e.preventDefault()
     setError(null)
     setSaving(true)
-    const body: Record<string, unknown> = { nickname, email }
+    const body: Record<string, unknown> = { nickname, email, isPrivate }
     if (newPw) { body.currentPassword = currentPw; body.newPassword = newPw }
     const r = await apiPatch<{ user: typeof account }>('/api/auth/settings', body)
     setSaving(false)
@@ -281,6 +282,22 @@ export default function Settings() {
                 </div>
               </div>
               <p className="text-xs text-slate-600 mt-1">{t.leaveBlank}</p>
+            </div>
+
+            <hr className="border-white/5" />
+
+            <div className="flex items-center justify-between p-3 glass rounded-lg">
+              <div>
+                <div className="text-sm text-cinema-text">Private account</div>
+                <div className="text-xs text-cinema-muted mt-0.5">Hide your watch history and friends from other users</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPrivate(!isPrivate)}
+                className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 overflow-hidden ${isPrivate ? 'bg-purple-600' : 'bg-slate-700'}`}
+              >
+                <span className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${isPrivate ? 'translate-x-5' : 'translate-x-0'}`} />
+              </button>
             </div>
 
             <button type="submit" disabled={saving} className="btn-primary w-full flex items-center justify-center gap-2">

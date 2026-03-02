@@ -402,6 +402,24 @@ app.delete('/api/downloads/:id', requireAuth, async (req, res) => {
   res.json({ success: await dl.remove(req.params.id) });
 });
 
+// ── User profile ──────────────────────────────────────────────────────────────
+app.get('/api/users/:id/profile', requireAuth, async (req, res) => {
+  const requesterId = (req as any).userId as string;
+  const profile = await auth.getProfile(req.params.id, requesterId);
+  if (!profile) { res.status(404).json({ error: 'User not found' }); return; }
+  res.json(profile);
+});
+
+app.post('/api/users/:id/friend', requireAuth, async (req, res) => {
+  const ok = await auth.addFriend((req as any).userId, req.params.id);
+  res.json({ success: ok });
+});
+
+app.delete('/api/users/:id/friend', requireAuth, async (req, res) => {
+  const ok = await auth.removeFriend((req as any).userId, req.params.id);
+  res.json({ success: ok });
+});
+
 // ── Room invite preview (public — shareable link) ─────────────────────────────
 app.get('/api/rooms/invite/:code', (req, res) => {
   const room = rm.getRoomByInviteCode(req.params.code);
@@ -417,6 +435,9 @@ app.get('/api/rooms/invite/:code', (req, res) => {
 dl.setBroadcast((items) => io.emit('downloads:update', items));
 
 // ── Socket.io rooms ───────────────────────────────────────────────────────────
+// Leader reconnect grace: key = `${userId}:${roomId}`, value = timer
+const leaderGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 io.on('connection', socket => {
   const userId = (socket.handshake.query.userId as string) || uuidv4();
   const nickname = (socket.handshake.query.nickname as string) || `Guest_${userId.slice(0, 4)}`;
@@ -437,6 +458,14 @@ io.on('connection', socket => {
   });
 
   socket.on('room:join', (data: { roomId: string }, cb) => {
+    // Cancel any pending leader-disconnect grace timer for this user
+    const graceKey = `${socket.data.userId}:${data.roomId}`;
+    if (leaderGraceTimers.has(graceKey)) {
+      clearTimeout(leaderGraceTimers.get(graceKey)!);
+      leaderGraceTimers.delete(graceKey);
+      console.log(`[leader-grace] ${socket.data.nickname} reconnected — grace cancelled`);
+    }
+
     const result = rm.joinRoom(data.roomId, socket.data.userId, socket.id, socket.data.nickname);
     if ('error' in result) { cb({ error: result.error }); return; }
     const media = mediaLibrary.find(m => m.id === result.room.mediaId);
@@ -444,6 +473,11 @@ io.on('connection', socket => {
     socket.join(result.room.id);
     socket.to(result.room.id).emit('room:participant_join', { participant: result.user, participants: result.room.participants });
     cb({ room: result.room, user: result.user, media, userId: socket.data.userId });
+    // Track watch history (fire-and-forget; only for DB-backed users, not guests)
+    const isGuest = !socket.handshake.query.userId;
+    if (!isGuest && !('error' in result)) {
+      auth.recordWatch(socket.data.userId, result.room.mediaTitle, result.room.name).catch(() => {});
+    }
   });
 
   socket.on('room:leave', () => doLeave(socket.data.roomId, socket.data.userId, socket));
@@ -499,9 +533,37 @@ io.on('connection', socket => {
   socket.on('room:reactions_toggle', (d: { enabled: boolean }) => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { reactionsEnabled: d.enabled }); io.to(socket.data.roomId!).emit('room:settings_update', { reactionsEnabled: d.enabled }); });
   socket.on('room:lock',             (d: { locked: boolean })  => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { isLocked: d.locked });           io.to(socket.data.roomId!).emit('room:settings_update', { isLocked: d.locked }); });
 
+  socket.on('room:transfer_leader', (d: { targetUserId: string }) => {
+    const rid = socket.data.roomId;
+    if (!rid || !isLeader()) return;
+    const updated = rm.transferLeader(rid, socket.data.userId, d.targetUserId);
+    if (!updated) return;
+    io.to(rid).emit('room:participant_leave', { userId: '', participants: updated.participants, newLeaderId: updated.leaderId });
+  });
+
   socket.on('disconnect', () => {
     console.log(`[-] ${socket.data.nickname} (${socket.id})`);
-    doLeave(socket.data.roomId, socket.data.userId, socket);
+    const roomId = socket.data.roomId;
+    const userId = socket.data.userId;
+    if (!roomId) return;
+
+    const room = rm.getRoomById(roomId);
+    if (room && room.leaderId === userId) {
+      // Leader disconnected — give 30s grace period before removing them.
+      // If they reconnect (F5), the grace timer is cancelled in room:join.
+      const graceKey = `${userId}:${roomId}`;
+      if (!leaderGraceTimers.has(graceKey)) {
+        console.log(`[leader-grace] ${socket.data.nickname} disconnected — 30s grace started`);
+        const timer = setTimeout(() => {
+          leaderGraceTimers.delete(graceKey);
+          doLeave(roomId, userId, socket);
+          console.log(`[leader-grace] ${socket.data.nickname} — grace expired, removed from room`);
+        }, 30_000);
+        leaderGraceTimers.set(graceKey, timer);
+      }
+    } else {
+      doLeave(roomId, userId, socket);
+    }
   });
 
   function isLeader(): boolean {

@@ -87,6 +87,18 @@ export interface UserSettings {
   defaultSubsLang: string;
   maxConcurrentDownloads: number;
   autoSyncOnJoin: boolean;
+  isPrivate: boolean;
+}
+
+export interface UserProfile {
+  id: string;
+  username: string;
+  nickname: string;
+  avatarSeed: string;
+  createdAt: number;
+  isPrivate: boolean;
+  watchHistory?: { mediaTitle: string; roomName: string; watchedAt: number }[];
+  friends?: { id: string; nickname: string; avatarSeed: string }[];
 }
 
 export interface Account {
