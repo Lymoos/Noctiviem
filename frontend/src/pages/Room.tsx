@@ -362,7 +362,7 @@ export default function Room() {
             <div className="cinema-curtain-r" />
 
             {/* Cinema screen frame */}
-            <div className="cinema-screen-frame" style={{ width: '72%' }}>
+            <div className="cinema-screen-frame" style={{ width: '72%', maxWidth: 'calc(42vh * (16 / 9))' }}>
               <VideoPlayer
                 media={media}
                 serverTime={room.currentTime}
@@ -425,9 +425,9 @@ export default function Room() {
           </div>
         </div>
 
-        {/* Right: Chat — full-screen overlay on mobile, side panel on desktop */}
+        {/* Right: Chat — fixed overlay on both mobile and desktop (never pushes video) */}
         {chatOpen && (
-          <div className="fixed inset-0 z-50 sm:relative sm:inset-auto sm:z-auto w-full sm:w-72 flex-shrink-0 sm:border-l border-white/5 flex flex-col min-h-0 animate-slide-in-right">
+          <div className="fixed inset-0 z-50 sm:inset-auto sm:right-0 sm:top-14 sm:bottom-0 w-full sm:w-80 flex flex-col border-l border-white/5 bg-cinema-bg/95 backdrop-blur-sm animate-slide-in-right">
             <Chat
               messages={room.messages}
               currentUserId={userId}

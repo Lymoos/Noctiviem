@@ -42,12 +42,15 @@ async function fixAudioInPlace(mp4Path: string): Promise<void> {
     console.log(`[audio-fix] transcoding audio in ${path.basename(mp4Path)} → aac`);
     await execFileAsync('ffmpeg', [
       '-i', mp4Path,
-      '-map', '0:v', '-map', '0:a',
+      '-map', '0:v:0',   // first video stream only (avoids DV dual-layer duration issues)
+      '-map', '0:a',
       '-c:v', 'copy',
       '-c:a', 'aac', '-b:a', '192k',
+      '-map_metadata', '0',     // preserve global metadata
+      '-map_metadata:s', '0:s', // preserve stream metadata (audio track titles)
       '-movflags', '+faststart',
       tmpPath,
-    ], { timeout: 60 * 60 * 1000 });
+    ], { timeout: 3 * 60 * 60 * 1000 }); // 3h timeout
     fs.renameSync(tmpPath, mp4Path);
     console.log(`[audio-fix] done ${path.basename(mp4Path)}`);
   } catch (e) {
@@ -71,14 +74,16 @@ async function remuxToMp4(inputPath: string): Promise<string> {
   console.log(`[remux] ${path.basename(inputPath)} → mp4`);
   await execFileAsync('ffmpeg', [
     '-i', inputPath,
-    '-map', '0:v',       // all video streams
+    '-map', '0:v:0',     // first video stream only (avoids DV dual-layer duration issues)
     '-map', '0:a',       // all audio streams
     '-c:v', 'copy',      // copy video — no quality loss, fast
     '-c:a', 'aac',       // transcode audio to AAC (browsers support this)
     '-b:a', '192k',
+    '-map_metadata', '0',     // preserve global metadata
+    '-map_metadata:s', '0:s', // preserve stream metadata (audio track titles/studio names)
     '-movflags', '+faststart',
     outputPath,
-  ], { timeout: 20 * 60 * 1000 });
+  ], { timeout: 3 * 60 * 60 * 1000 }); // 3h timeout for large files
   console.log(`[remux] done → ${path.basename(outputPath)}`);
   try {
     await fs.promises.unlink(inputPath);
@@ -119,8 +124,13 @@ async function probeVideoFile(filePath: string): Promise<{
     const audio = audioStreams.length > 0
       ? audioStreams.map((s, i) => {
           const lang  = s.tags?.language ?? 'und';
-          const title = s.tags?.title;
-          const label = title ?? (lang !== 'und' ? `${lang.toUpperCase()} — ${s.codec_name ?? 'audio'}` : `Track ${i + 1}`);
+          // Try title, then handler_name (MP4 preserves title here), then fallback
+          const title = s.tags?.title ?? s.tags?.handler_name;
+          const label = title
+            ? title
+            : lang !== 'und'
+              ? `${lang.toUpperCase()} ${i + 1}`
+              : `Track ${i + 1}`;
           return { id: i, label, lang };
         })
       : fallback.audio;

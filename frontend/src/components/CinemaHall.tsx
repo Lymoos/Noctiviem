@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Crown } from 'lucide-react'
 import { User, FloatingReaction } from '../types'
 import { socket } from '../socket'
@@ -170,8 +171,8 @@ export default function CinemaHall({
         }
       </div>
 
-      {/* Profile modal */}
-      {profileUserId && (
+      {/* Profile modal — rendered via portal to escape transform stacking contexts */}
+      {profileUserId && createPortal(
         <ProfileModal
           userId={profileUserId}
           nickname={participants.find(p => p.id === profileUserId)?.nickname ?? ''}
@@ -179,11 +180,12 @@ export default function CinemaHall({
           currentUserId={currentUserId}
           onClose={() => setProfileUserId(null)}
           onTransferLeader={() => handleTransferLeader(profileUserId)}
-        />
+        />,
+        document.body
       )}
 
-      {/* Whisper modal */}
-      {whisperTarget && (
+      {/* Whisper modal — rendered via portal */}
+      {whisperTarget && createPortal(
         <div className="modal-backdrop" onClick={() => setWhisperTarget(null)}>
           <div className="modal-content max-w-sm" onClick={e => e.stopPropagation()}>
             <h3 className="font-semibold text-cinema-text mb-1">
@@ -207,7 +209,8 @@ export default function CinemaHall({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
