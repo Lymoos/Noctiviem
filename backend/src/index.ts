@@ -6,11 +6,51 @@ import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import db from './db';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Run ffmpeg via spawn so we can read stderr progress lines.
+ * onProgress(secs) is called with the current encoded time in seconds.
+ */
+function ffmpegSpawn(
+  args: string[],
+  { timeout = 3 * 60 * 60 * 1000, onProgress }: { timeout?: number; onProgress?: (secs: number) => void } = {},
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderrTail = '';
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGKILL');
+      reject(new Error(`ffmpeg timed out after ${Math.round(timeout / 60000)} min`));
+    }, timeout);
+
+    proc.stderr!.on('data', (chunk: Buffer) => {
+      stderrTail = (stderrTail + chunk.toString()).slice(-800);
+      if (!onProgress) return;
+      const m = stderrTail.match(/time=(\d+):(\d+):([\d.]+)/);
+      if (m) {
+        const secs = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
+        onProgress(secs);
+      }
+    });
+
+    proc.on('close', code => {
+      clearTimeout(timer);
+      if (timedOut) return;
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited with code ${code}\n${stderrTail.slice(-300)}`));
+    });
+
+    proc.on('error', err => { clearTimeout(timer); reject(err); });
+  });
+}
 
 // Audio codecs natively supported by all major browsers inside MP4/WebM
 const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis']);
@@ -36,21 +76,23 @@ async function needsAudioFix(filePath: string): Promise<boolean> {
  * Transcode all audio streams of an existing MP4 to AAC in-place.
  * Video and subtitle streams are stream-copied unchanged.
  */
-async function fixAudioInPlace(mp4Path: string): Promise<void> {
+async function fixAudioInPlace(mp4Path: string, onProgress?: (secs: number) => void): Promise<void> {
   const tmpPath = mp4Path + '.__fix.mp4';
   try {
     console.log(`[audio-fix] transcoding audio in ${path.basename(mp4Path)} → aac`);
-    await execFileAsync('ffmpeg', [
+    await ffmpegSpawn([
       '-i', mp4Path,
-      '-map', '0:v:0',   // first video stream only (avoids DV dual-layer duration issues)
+      '-map', '0:v:0',          // first video stream only
       '-map', '0:a',
       '-c:v', 'copy',
       '-c:a', 'aac', '-b:a', '192k',
-      '-map_metadata', '0',     // preserve global metadata
-      '-map_metadata:s', '0:s', // preserve stream metadata (audio track titles)
-      '-movflags', '+faststart',
+      '-map_metadata', '0',
+      '-map_metadata:s', '0:s',
+      // NOTE: no -movflags +faststart — on 40GB+ files that requires a full
+      // second read+write pass (3× I/O), which can add 30+ minutes on slow disks.
+      // Range requests (Accept-Ranges: bytes) handle moov-at-end just fine.
       tmpPath,
-    ], { timeout: 3 * 60 * 60 * 1000 }); // 3h timeout
+    ], { timeout: 3 * 60 * 60 * 1000, onProgress });
     fs.renameSync(tmpPath, mp4Path);
     console.log(`[audio-fix] done ${path.basename(mp4Path)}`);
   } catch (e) {
@@ -66,24 +108,24 @@ async function fixAudioInPlace(mp4Path: string): Promise<void> {
  * - Maps every audio stream so multilingual tracks are preserved
  * Returns the .mp4 path; if input is already .mp4/.webm, returns it unchanged.
  */
-async function remuxToMp4(inputPath: string): Promise<string> {
+async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void): Promise<string> {
   const ext = path.extname(inputPath).toLowerCase();
   if (ext === '.mp4' || ext === '.webm') return inputPath;
   const outputPath = inputPath.slice(0, -ext.length) + '.mp4';
   if (fs.existsSync(outputPath)) return outputPath;
   console.log(`[remux] ${path.basename(inputPath)} → mp4`);
-  await execFileAsync('ffmpeg', [
+  await ffmpegSpawn([
     '-i', inputPath,
-    '-map', '0:v:0',     // first video stream only (avoids DV dual-layer duration issues)
-    '-map', '0:a',       // all audio streams
-    '-c:v', 'copy',      // copy video — no quality loss, fast
-    '-c:a', 'aac',       // transcode audio to AAC (browsers support this)
+    '-map', '0:v:0',          // first video stream only (avoids DV dual-layer duration issues)
+    '-map', '0:a',            // all audio streams
+    '-c:v', 'copy',           // copy video — no re-encode
+    '-c:a', 'aac',            // transcode audio to AAC
     '-b:a', '192k',
-    '-map_metadata', '0',     // preserve global metadata
-    '-map_metadata:s', '0:s', // preserve stream metadata (audio track titles/studio names)
-    '-movflags', '+faststart',
+    '-map_metadata', '0',
+    '-map_metadata:s', '0:s',
+    // No +faststart: on 40GB+ files that's 3× disk I/O. Range requests handle moov-at-end.
     outputPath,
-  ], { timeout: 3 * 60 * 60 * 1000 }); // 3h timeout for large files
+  ], { timeout: 3 * 60 * 60 * 1000, onProgress });
   console.log(`[remux] done → ${path.basename(outputPath)}`);
   try {
     await fs.promises.unlink(inputPath);
@@ -221,20 +263,39 @@ dl.setOnCompleted(async (item) => {
     mediaLibrary.push(tempItem);
     io.emit('media:updated', mediaLibrary);
 
+    // Helper: emit progress percentage to all clients
+    const emitProgress = (pct: number) => io.emit('media:progress', { id: tempId, pct: Math.min(99, pct) });
+
     // Remux to MP4 (stream copy + AAC audio)
+    let remuxFailed = false;
     try {
-      filePath = await remuxToMp4(filePath);
+      filePath = await remuxToMp4(filePath, secs => {
+        if (tempItem.duration > 0) emitProgress(Math.round((secs / tempItem.duration) * 80)); // 0→80%
+      });
     } catch (e: any) {
-      console.error('[remux] failed, using original file:', e.message);
+      console.error('[remux] failed:', e.message);
+      remuxFailed = true;
     }
 
     // Fix audio codec (AC3/DTS/TrueHD → AAC) for files already in MP4 container
-    if (path.extname(filePath).toLowerCase() === '.mp4') {
+    if (!remuxFailed && path.extname(filePath).toLowerCase() === '.mp4') {
       try {
-        if (await needsAudioFix(filePath)) await fixAudioInPlace(filePath);
+        if (await needsAudioFix(filePath)) {
+          // Probe duration first so we can show percentage
+          const { duration: dur } = await probeVideoFile(filePath);
+          await fixAudioInPlace(filePath, secs => {
+            if (dur > 0) emitProgress(80 + Math.round((secs / dur) * 18)); // 80→98%
+          });
+        }
       } catch (e: any) {
         console.error('[audio-fix] new download:', e.message);
       }
+    }
+
+    if (remuxFailed) {
+      tempItem.status = 'error';
+      io.emit('media:updated', mediaLibrary);
+      continue;
     }
 
     const { duration, audio, subtitles } = await probeVideoFile(filePath);

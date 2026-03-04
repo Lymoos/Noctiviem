@@ -40,9 +40,26 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDel
 
         {/* Processing overlay */}
         {item.status === 'processing' && (
-          <div className="absolute inset-0 bg-cinema-bg/70 flex flex-col items-center justify-center gap-2">
+          <div className="absolute inset-0 bg-cinema-bg/75 flex flex-col items-center justify-center gap-3 px-4">
             <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
             <span className="text-xs text-slate-400">{t.processingDots}</span>
+            {item.progress !== undefined && (
+              <div className="w-full">
+                <div className="flex justify-between text-[10px] text-slate-500 mb-1">
+                  <span>Converting…</span>
+                  <span>{item.progress}%</span>
+                </div>
+                <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${item.progress}%`,
+                      background: 'linear-gradient(90deg, #7c3aed, #3b82f6)',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 

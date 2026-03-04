@@ -70,6 +70,7 @@ interface AppStore {
 
   mediaLibrary: MediaItem[];
   setMediaLibrary: (items: MediaItem[]) => void;
+  updateMediaProgress: (id: string, pct: number) => void;
 
   downloads: DownloadItem[];
   setDownloads: (items: DownloadItem[]) => void;
@@ -140,6 +141,9 @@ export const useStore = create<AppStore>((set) => ({
 
   mediaLibrary: [],
   setMediaLibrary: (items) => set({ mediaLibrary: items }),
+  updateMediaProgress: (id, pct) => set(s => ({
+    mediaLibrary: s.mediaLibrary.map(m => m.id === id ? { ...m, progress: pct } : m),
+  })),
 
   downloads: [],
   setDownloads: (items) => set({ downloads: items }),

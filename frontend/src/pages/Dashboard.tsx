@@ -32,7 +32,7 @@ function StorageStat({ bytes }: { bytes: number | null }) {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { setMediaLibrary, mediaLibrary, downloads, setRoom, setCurrentUser, nickname, toggleDownloads, lang } = useStore()
+  const { setMediaLibrary, updateMediaProgress, mediaLibrary, downloads, setRoom, setCurrentUser, nickname, toggleDownloads, lang } = useStore()
   const t = translations[lang]
   const [loading, setLoading] = useState(true)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -79,8 +79,15 @@ export default function Dashboard() {
       setMediaLibrary(items)
     })
 
-    return () => { socket.off('media:updated') }
-  }, [setMediaLibrary])
+    socket.on('media:progress', ({ id, pct }: { id: string; pct: number }) => {
+      updateMediaProgress(id, pct)
+    })
+
+    return () => {
+      socket.off('media:updated')
+      socket.off('media:progress')
+    }
+  }, [setMediaLibrary, updateMediaProgress])
 
   const handleCreateRoom = useCallback((data: { name: string; mediaId: string; maxParticipants: number; password?: string; friendsOnly?: boolean }) => {
     setCreateModalOpen(false)

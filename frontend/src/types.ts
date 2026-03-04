@@ -72,6 +72,7 @@ export interface MediaItem {
   qualities: string[];
   status: 'ready' | 'processing' | 'error';
   videoUrl: string;
+  progress?: number; // 0-99 during processing, set by media:progress socket event
 }
 
 export interface RoomPreview {
