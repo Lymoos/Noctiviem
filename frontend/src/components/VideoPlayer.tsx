@@ -197,6 +197,9 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
     for (let i = 0; i < tracks.length; i++) {
       tracks[i].enabled = (i === index)
     }
+    // Force decoder flush so the new audio track takes effect immediately
+    // (Chrome buffers the old track; a seek to the same position re-decodes)
+    video.currentTime = video.currentTime
   }, [])
 
   useEffect(() => {

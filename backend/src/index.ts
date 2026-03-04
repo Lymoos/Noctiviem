@@ -654,8 +654,9 @@ app.get('/api/users/search', requireAuth, async (req, res) => {
 dl.setBroadcast((items) => io.emit('downloads:update', items));
 
 // ── Socket.io rooms ───────────────────────────────────────────────────────────
-// Leader reconnect grace: key = `${userId}:${roomId}`, value = timer
+// Reconnect grace timers: key = `${userId}:${roomId}`, value = timer
 const leaderGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const participantGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 io.on('connection', socket => {
   // Authenticated users: use the JWT user ID so profile API works by socket userId
@@ -697,12 +698,17 @@ io.on('connection', socket => {
   });
 
   socket.on('room:join', async (data: { roomId: string; password?: string }, cb) => {
-    // Cancel any pending leader-disconnect grace timer for this user
+    // Cancel any pending reconnect grace timer for this user (leader or participant)
     const graceKey = `${socket.data.userId}:${data.roomId}`;
     if (leaderGraceTimers.has(graceKey)) {
       clearTimeout(leaderGraceTimers.get(graceKey)!);
       leaderGraceTimers.delete(graceKey);
       console.log(`[leader-grace] ${socket.data.nickname} reconnected — grace cancelled`);
+    }
+    if (participantGraceTimers.has(graceKey)) {
+      clearTimeout(participantGraceTimers.get(graceKey)!);
+      participantGraceTimers.delete(graceKey);
+      console.log(`[participant-grace] ${socket.data.nickname} reconnected — grace cancelled`);
     }
 
     // Check password and friends-only before joining (skip for reconnects)
@@ -849,10 +855,9 @@ io.on('connection', socket => {
     if (!roomId) return;
 
     const room = rm.getRoomById(roomId);
+    const graceKey = `${userId}:${roomId}`;
     if (room && room.leaderId === userId) {
       // Leader disconnected — give 30s grace period before removing them.
-      // If they reconnect (F5), the grace timer is cancelled in room:join.
-      const graceKey = `${userId}:${roomId}`;
       if (!leaderGraceTimers.has(graceKey)) {
         console.log(`[leader-grace] ${socket.data.nickname} disconnected — 30s grace started`);
         const timer = setTimeout(() => {
@@ -862,8 +867,17 @@ io.on('connection', socket => {
         }, 30_000);
         leaderGraceTimers.set(graceKey, timer);
       }
-    } else {
-      doLeave(roomId, userId, socket);
+    } else if (room) {
+      // Non-leader participant — give 15s grace period so F5 restores their seat.
+      if (!participantGraceTimers.has(graceKey)) {
+        console.log(`[participant-grace] ${socket.data.nickname} disconnected — 15s grace started`);
+        const timer = setTimeout(() => {
+          participantGraceTimers.delete(graceKey);
+          doLeave(roomId, userId, socket);
+          console.log(`[participant-grace] ${socket.data.nickname} — grace expired, removed from room`);
+        }, 15_000);
+        participantGraceTimers.set(graceKey, timer);
+      }
     }
   });
 
