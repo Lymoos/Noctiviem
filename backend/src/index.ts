@@ -94,12 +94,13 @@ async function fixAudioInPlace(mp4Path: string, onProgress?: (secs: number) => v
   const tmpPath = mp4Path + '.__fix.mp4';
   try {
     console.log(`[audio-fix] transcoding audio in ${path.basename(mp4Path)} → aac`);
+    const audioArgs = await buildAudioArgs(mp4Path);
     await ffmpegSpawn([
       '-i', mp4Path,
       '-map', '0:v:0',          // first video stream only
       '-map', '0:a',
       '-c:v', 'copy',
-      '-c:a', 'aac', '-b:a', '192k',
+      ...audioArgs,             // copy safe codecs, transcode incompatible ones to AAC
       '-map_metadata', '0',
       '-map_metadata:s', '0:s',
       // NOTE: no -movflags +faststart — on 40GB+ files that requires a full
@@ -116,9 +117,44 @@ async function fixAudioInPlace(mp4Path: string, onProgress?: (secs: number) => v
 }
 
 /**
+ * Build per-stream audio codec args for ffmpeg.
+ * Streams already in a browser-safe codec are copied; others are transcoded to AAC.
+ * This avoids re-encoding audio that is already compatible, which on large files
+ * (40GB+) can save many minutes of CPU + I/O time.
+ */
+async function buildAudioArgs(inputPath: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'quiet',
+      '-select_streams', 'a',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'csv=p=0',
+      inputPath,
+    ], { timeout: 15000 });
+    const codecs = stdout.trim().split('\n').filter(Boolean).map(l => l.trim());
+    if (codecs.length === 0) return ['-c:a', 'aac', '-b:a', '192k'];
+    const args: string[] = [];
+    let anyTranscode = false;
+    for (let i = 0; i < codecs.length; i++) {
+      if (BROWSER_SAFE_AUDIO.has(codecs[i])) {
+        args.push(`-c:a:${i}`, 'copy');
+      } else {
+        args.push(`-c:a:${i}`, 'aac', `-b:a:${i}`, '192k');
+        anyTranscode = true;
+      }
+    }
+    console.log(`[remux] audio streams: [${codecs.join(', ')}] — ${anyTranscode ? 'some need transcode' : 'all copy'}`);
+    return args;
+  } catch {
+    return ['-c:a', 'aac', '-b:a', '192k']; // safe fallback
+  }
+}
+
+/**
  * Remux a video file to MP4.
  * - Copies video stream (no re-encode)
- * - Transcodes ALL audio streams to AAC (browser-compatible)
+ * - Copies audio streams already in browser-safe codecs (AAC/MP3/Opus/Vorbis)
+ * - Transcodes only non-compatible audio streams to AAC
  * - Maps every audio stream so multilingual tracks are preserved
  * Returns the .mp4 path; if input is already .mp4/.webm, returns it unchanged.
  */
@@ -128,13 +164,13 @@ async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void
   const outputPath = inputPath.slice(0, -ext.length) + '.mp4';
   if (fs.existsSync(outputPath)) return outputPath;
   console.log(`[remux] ${path.basename(inputPath)} → mp4`);
+  const audioArgs = await buildAudioArgs(inputPath);
   await ffmpegSpawn([
     '-i', inputPath,
     '-map', '0:v:0',          // first video stream only (avoids DV dual-layer duration issues)
     '-map', '0:a',            // all audio streams
     '-c:v', 'copy',           // copy video — no re-encode
-    '-c:a', 'aac',            // transcode audio to AAC
-    '-b:a', '192k',
+    ...audioArgs,             // per-stream: copy if already browser-safe, else → aac
     '-map_metadata', '0',
     '-map_metadata:s', '0:s',
     // No +faststart: on 40GB+ files that's 3× disk I/O. Range requests handle moov-at-end.
