@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import Hls from 'hls.js'
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize,
   Headphones, Subtitles, Wifi, ChevronDown, ChevronUp,
@@ -27,6 +28,7 @@ function formatTime(s: number): string {
 export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate, onEnded }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const hlsRef = useRef<Hls | null>(null)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -48,6 +50,40 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   const selectedSubs = room?.selectedSubs ?? 'off'
   const selectedQuality = room?.selectedQuality ?? 'Auto'
   const reactions = room?.reactions ?? []
+
+  // Attach video source: plain MP4/WebM or HLS (.m3u8) via hls.js
+  const isHls = media.videoUrl.includes('.m3u8')
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    // Destroy any previous hls.js instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+
+    if (isHls) {
+      if (Hls.isSupported()) {
+        const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 })
+        hls.loadSource(media.videoUrl)
+        hls.attachMedia(video)
+        hlsRef.current = hls
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Safari native HLS
+        video.src = media.videoUrl
+      }
+    } else {
+      video.src = media.videoUrl
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+    }
+  }, [media.videoUrl, isHls])
 
   // Sync video with server state
   useEffect(() => {
@@ -192,6 +228,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   const applyAudioTrack = useCallback((index: number) => {
     const video = videoRef.current
     if (!video) return
+    if (isHls) return // HLS audio tracks are managed via EXT-X-MEDIA renditions (future work)
     const tracks = (video as any).audioTracks
     if (!tracks || tracks.length === 0) return
     for (let i = 0; i < tracks.length; i++) {
@@ -217,7 +254,6 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
       {/* Video */}
       <video
         ref={videoRef}
-        src={media.videoUrl}
         className="w-full"
         style={{
           display: 'block',

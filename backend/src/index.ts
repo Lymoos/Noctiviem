@@ -69,6 +69,51 @@ function ffmpegSpawn(
 // Audio codecs natively supported by all major browsers inside MP4/WebM
 const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis']);
 
+// ─── HLS on-demand ────────────────────────────────────────────────────────────
+// Instead of copying the entire file to a new MP4 (can take 1.5h for 25GB),
+// we generate 10-second MPEG-TS segments on-demand using ffmpeg stream copy.
+// Files become available immediately after download — no waiting for conversion.
+const HLS_SEG_SECS = 10;
+
+// Promise cache: key = `${mediaId}:${segIdx}` → Buffer promise.
+// Concurrent requests for the same segment (watch-party clients in sync) share
+// one ffmpeg invocation. Entries expire 2 minutes after generation.
+const hlsSegCache = new Map<string, Promise<Buffer>>();
+
+function getHlsSegment(filePath: string, mediaId: string, idx: number): Promise<Buffer> {
+  const key = `${mediaId}:${idx}`;
+  if (hlsSegCache.has(key)) return hlsSegCache.get(key)!;
+
+  const startTime = idx * HLS_SEG_SECS;
+  const p = new Promise<Buffer>((resolve, reject) => {
+    const proc = spawn('ffmpeg', [
+      '-ss', String(startTime),
+      '-i', filePath,
+      '-t', String(HLS_SEG_SECS),
+      '-map', '0:v:0',
+      '-map', '0:a:0',      // first audio track (HLS multi-track needs EXT-X-MEDIA, future work)
+      '-c:v', 'copy',       // stream copy video — no re-encode, very fast
+      '-c:a', 'aac', '-b:a', '192k', '-ac', '2',  // AAC stereo required for MPEG-TS
+      '-f', 'mpegts',
+      'pipe:1',
+    ], { stdio: ['ignore', 'pipe', 'inherit'] });
+
+    const chunks: Buffer[] = [];
+    proc.stdout!.on('data', (c: Buffer) => chunks.push(c));
+    proc.on('close', code => {
+      if (code === 0) resolve(Buffer.concat(chunks));
+      else reject(new Error(`ffmpeg segment ${idx} exited ${code}`));
+    });
+    proc.on('error', reject);
+  });
+
+  p.then(() => setTimeout(() => hlsSegCache.delete(key), 120_000))
+   .catch(() => hlsSegCache.delete(key));
+
+  hlsSegCache.set(key, p);
+  return p;
+}
+
 /** Returns true if any audio stream in the file uses a non-browser-safe codec. */
 async function needsAudioFix(filePath: string): Promise<boolean> {
   try {
@@ -298,82 +343,52 @@ dl.setOnCompleted(async (item) => {
       if (fs.existsSync(flat)) filePath = flat;
     }
 
-    // Add a "converting" placeholder so the card appears immediately in the library
-    const tempId = uuidv4();
-    const tempItem: MediaItem = {
+    // Probe duration/streams — reads only file headers, completes in ~1-2 seconds
+    // even for 40GB files (no full file read needed).
+    let duration = 0;
+    let audio: MediaItem['audio'] = [{ id: 0, label: 'Track 1', lang: 'und' }];
+    let subtitles: MediaItem['subtitles'] = [{ id: 'off', label: 'Off', lang: 'off' }];
+    try {
+      const info = await probeVideoFile(filePath);
+      duration = Math.round(info.duration);
+      audio    = info.audio;
+      subtitles = info.subtitles;
+    } catch (e: any) {
+      console.error('[probe] failed:', e.message);
+    }
+
+    const tempId  = uuidv4();
+    const relPath = path.relative(dl.DOWNLOADS_DIR, filePath);
+    const ext     = path.extname(filePath).toLowerCase();
+
+    // If already a browser-compatible MP4 (AAC/MP3/Opus audio), serve directly.
+    // Otherwise stream via HLS on-demand — no full-file copy needed, available instantly.
+    const isDirectMp4 = (ext === '.mp4') && !(await needsAudioFix(filePath).catch(() => true));
+    const videoUrl = isDirectMp4
+      ? '/media/' + relPath.split('/').map(encodeURIComponent).join('/')
+      : `/hls-mkv/${tempId}/index.m3u8?p=${encodeURIComponent(relPath)}`;
+
+    console.log(`[media] "${title}" → ${isDirectMp4 ? 'direct MP4' : 'HLS on-demand'}`);
+
+    const newItem: MediaItem = {
       id: tempId, title,
       poster: `https://picsum.photos/seed/${item.id}/400/600`,
       thumbnail: `https://picsum.photos/seed/${item.id}/800/450`,
-      duration: 0, year: new Date().getFullYear(),
-      genre: 'Downloaded', description: 'Converting…',
-      audio: [{ id: 0, label: 'Track 1', lang: 'und' }],
-      subtitles: [{ id: 'off', label: 'Off', lang: 'off' }],
-      qualities: ['Auto'], status: 'processing', videoUrl: '',
+      duration, year: new Date().getFullYear(),
+      genre: 'Downloaded', description: '',
+      audio, subtitles,
+      qualities: ['Auto'], status: 'ready', videoUrl,
     };
-    mediaLibrary.push(tempItem);
-    io.emit('media:updated', mediaLibrary);
-
-    // Helper: emit progress percentage to all clients
-    const emitProgress = (pct: number) => io.emit('media:progress', { id: tempId, pct: Math.min(99, pct) });
-
-    // Probe duration before remuxing so progress % is accurate
-    let estDuration = 0;
-    try {
-      const pre = await probeVideoFile(filePath);
-      estDuration = pre.duration;
-    } catch { /* best-effort — progress just won't show % */ }
-
-    // Remux to MP4 (stream copy + AAC audio)
-    let remuxFailed = false;
-    try {
-      filePath = await remuxToMp4(filePath, secs => {
-        if (estDuration > 0) emitProgress(Math.round((secs / estDuration) * 80)); // 0→80%
-      });
-    } catch (e: any) {
-      console.error('[remux] failed:', e.message);
-      remuxFailed = true;
-    }
-
-    // Fix audio codec (AC3/DTS/TrueHD → AAC) for files already in MP4 container
-    if (!remuxFailed && path.extname(filePath).toLowerCase() === '.mp4') {
-      try {
-        if (await needsAudioFix(filePath)) {
-          // Use pre-probed duration; re-probe if we didn't get it earlier (e.g. file was already .mp4)
-          const dur = estDuration > 0 ? estDuration : (await probeVideoFile(filePath)).duration;
-          await fixAudioInPlace(filePath, secs => {
-            if (dur > 0) emitProgress(80 + Math.round((secs / dur) * 18)); // 80→98%
-          });
-        }
-      } catch (e: any) {
-        console.error('[audio-fix] new download:', e.message);
-      }
-    }
-
-    if (remuxFailed) {
-      tempItem.status = 'error';
-      io.emit('media:updated', mediaLibrary);
-      continue;
-    }
-
-    const { duration, audio, subtitles } = await probeVideoFile(filePath);
-    const relPath = path.relative(dl.DOWNLOADS_DIR, filePath);
-    const videoUrl = '/media/' + relPath.split('/').map(encodeURIComponent).join('/');
-
-    // Update placeholder in-place so the same array slot becomes ready
-    tempItem.duration = Math.round(duration);  // Int — DB requires whole seconds
-    tempItem.videoUrl = videoUrl;
-    tempItem.audio = audio;
-    tempItem.subtitles = subtitles;
-    tempItem.status = 'ready';
+    mediaLibrary.push(newItem);
     item.mediaIds.push(tempId);
 
     await db.mediaItem.create({
       data: {
-        id: tempId, title, poster: tempItem.poster,
-        thumbnail: tempItem.thumbnail, duration: tempItem.duration, year: tempItem.year,
-        genre: tempItem.genre, description: tempItem.description,
+        id: tempId, title, poster: newItem.poster,
+        thumbnail: newItem.thumbnail, duration, year: newItem.year,
+        genre: newItem.genre, description: newItem.description,
         audio: audio as any, subtitles: subtitles as any,
-        qualities: tempItem.qualities as any, status: 'ready',
+        qualities: newItem.qualities as any, status: 'ready',
         videoUrl,
       },
     }).catch((e: Error) => console.error('[media] DB save failed:', e.message));
@@ -396,6 +411,67 @@ app.use('/media', express.static(dl.DOWNLOADS_DIR, {
     res.setHeader('Accept-Ranges', 'bytes');
   },
 }));
+
+// ── HLS manifest ─────────────────────────────────────────────────────────────
+// videoUrl format for HLS items: /hls-mkv/:id/index.m3u8?p=encodedRelPath
+// The relative path is URL-encoded inside ?p= so it survives server restarts.
+app.get('/hls-mkv/:id/index.m3u8', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const encodedRel = req.query.p as string;
+  if (!encodedRel) { res.status(400).end(); return; }
+
+  const item = mediaLibrary.find(m => m.id === id);
+  if (!item) { res.status(404).end(); return; }
+
+  const duration = item.duration || 0;
+  const numSegs  = Math.ceil(duration / HLS_SEG_SECS) || 1;
+  const pParam   = `p=${encodeURIComponent(encodedRel)}`;
+
+  const lines: string[] = [
+    '#EXTM3U',
+    '#EXT-X-VERSION:3',
+    `#EXT-X-TARGETDURATION:${HLS_SEG_SECS}`,
+    '#EXT-X-MEDIA-SEQUENCE:0',
+    '#EXT-X-PLAYLIST-TYPE:VOD',
+  ];
+  for (let i = 0; i < numSegs; i++) {
+    const segLen = duration > 0
+      ? Math.min(HLS_SEG_SECS, duration - i * HLS_SEG_SECS)
+      : HLS_SEG_SECS;
+    lines.push(`#EXTINF:${segLen.toFixed(6)},`);
+    lines.push(`/hls-mkv/${id}/seg/${i}.ts?${pParam}`);
+  }
+  lines.push('#EXT-X-ENDLIST');
+
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.send(lines.join('\n'));
+});
+
+// ── HLS segment ───────────────────────────────────────────────────────────────
+app.get('/hls-mkv/:id/seg/:idx.ts', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const idx = parseInt(req.params.idx);
+  const encodedRel = req.query.p as string;
+  if (isNaN(idx) || !encodedRel) { res.status(400).end(); return; }
+
+  const relPath  = decodeURIComponent(encodedRel);
+  const filePath = path.join(dl.DOWNLOADS_DIR, relPath);
+  // Prevent path traversal
+  if (!filePath.startsWith(dl.DOWNLOADS_DIR)) { res.status(403).end(); return; }
+  if (!fs.existsSync(filePath)) { res.status(404).end(); return; }
+
+  try {
+    const data = await getHlsSegment(filePath, id, idx);
+    res.setHeader('Content-Type', 'video/MP2T');
+    res.setHeader('Content-Length', String(data.length));
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(data);
+  } catch (e: any) {
+    console.error(`[hls-seg] ${id}:${idx} — ${e.message}`);
+    if (!res.headersSent) res.status(500).end();
+  }
+});
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 function requireAuth(req: Request, res: Response, next: NextFunction) {
