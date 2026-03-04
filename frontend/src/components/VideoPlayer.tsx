@@ -156,14 +156,26 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
     setSubsMenuOpen(false)
   }
 
-  const handleSkip = (seconds: number) => {
+  const handleSkip = useCallback((seconds: number) => {
     if (!isLeader) return
     const video = videoRef.current
     if (!video) return
     const newTime = Math.max(0, Math.min(video.currentTime + seconds, duration))
     video.currentTime = newTime
     socket.emit('room:seek', { currentTime: newTime })
-  }
+  }, [isLeader, duration])
+
+  // Keyboard shortcuts: ← = -5s, → = +15s
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); handleSkip(-5) }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); handleSkip(15) }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [handleSkip])
 
   const handleQuality = (q: string) => {
     if (!isLeader) return

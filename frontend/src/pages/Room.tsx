@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Crown, Users, MessageSquare, Share2, Settings,
-  ArrowLeft, Copy, CheckCheck, Wifi, WifiOff, X
+  ArrowLeft, Copy, CheckCheck, Wifi, WifiOff, X,
+  MonitorPlay, Columns,
 } from 'lucide-react'
 import VideoPlayer from '../components/VideoPlayer'
 import CinemaHall from '../components/CinemaHall'
@@ -33,6 +34,7 @@ export default function Room() {
   const [joinError, setJoinError] = useState<string | null>(null)
   const [kicked, setKicked] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [layoutMode, setLayoutMode] = useState<'cinema' | 'side'>('cinema')
   const [activeBubbles, setActiveBubbles] = useState<{ [userId: string]: string }>({})
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([])
   const bubbleTimers = useRef<{ [userId: string]: ReturnType<typeof setTimeout> }>({})
@@ -340,44 +342,43 @@ export default function Room() {
           </div>
         )}
 
-        {/* Chat toggle */}
+        {/* Chat toggle (cinema mode only) */}
+        {layoutMode === 'cinema' && (
+          <button
+            onClick={toggleChat}
+            className={`btn-ghost p-2 flex-shrink-0 ${chatOpen ? 'text-purple-400' : ''}`}
+          >
+            <MessageSquare size={15} />
+          </button>
+        )}
+
+        {/* Layout mode toggle */}
         <button
-          onClick={toggleChat}
-          className={`btn-ghost p-2 flex-shrink-0 ${chatOpen ? 'text-purple-400' : ''}`}
+          onClick={() => setLayoutMode(m => m === 'cinema' ? 'side' : 'cinema')}
+          title={layoutMode === 'cinema' ? 'Screen + Chat' : 'Cinema Hall'}
+          className={`btn-ghost p-2 flex-shrink-0 ${layoutMode === 'side' ? 'text-purple-400' : ''}`}
         >
-          <MessageSquare size={15} />
+          {layoutMode === 'cinema' ? <Columns size={15} /> : <MonitorPlay size={15} />}
         </button>
       </header>
 
       {/* ── MAIN AREA ────────────────────────────────────────────────────────── */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      {layoutMode === 'side' ? (
+        /* ── SIDE MODE: video left + chat right, no overlap ── */
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+          {/* Video — fills remaining space */}
+          <div className="flex-1 min-w-0 min-h-0 bg-black flex flex-col items-stretch relative">
+            <VideoPlayer
+              media={media}
+              serverTime={room.currentTime}
+              isPlaying={room.isPlaying}
+              onTimeUpdate={setCurrentVideoTime}
+              onEnded={() => {}}
+            />
 
-        {/* Left: Cinema stage */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden cinema-room-stage">
-
-          {/* ── Screen section ── */}
-          <div className="flex-shrink-0 flex justify-center relative cinema-screen-enter px-0 pt-5">
-            {/* Curtain decorations flanking the screen */}
-            <div className="cinema-curtain-l" />
-            <div className="cinema-curtain-r" />
-
-            {/* Cinema screen frame */}
-            <div className="cinema-screen-frame" style={{ width: '72%', maxWidth: 'calc(56vh * (16 / 9))' }}>
-              <VideoPlayer
-                media={media}
-                serverTime={room.currentTime}
-                isPlaying={room.isPlaying}
-                onTimeUpdate={setCurrentVideoTime}
-                onEnded={() => {
-                  // When video ends and there's a queued film, leader sees Play Next button
-                  // (the banner below handles this — nothing needed here)
-                }}
-              />
-            </div>
-
-            {/* Up Next banner — visible to everyone when a film is queued */}
+            {/* Up Next banner */}
             {room.queuedMediaId && (
-              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 glass-strong rounded-xl px-4 py-2.5 border border-blue-500/20 animate-fade-in">
+              <div className="absolute bottom-16 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 glass-strong rounded-xl px-4 py-2.5 border border-blue-500/20 animate-fade-in">
                 {room.queuedMediaPoster && (
                   <img
                     src={room.queuedMediaPoster}
@@ -394,7 +395,6 @@ export default function Room() {
                   <button
                     onClick={() => socket.emit('room:play_next')}
                     className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 transition-colors flex-shrink-0 ml-1"
-                    title="Switch to queued film now"
                   >
                     <SkipForward size={14} />
                     <span className="hidden sm:inline">Play now</span>
@@ -404,39 +404,98 @@ export default function Room() {
             )}
           </div>
 
-          {/* Stage edge — glowing divider between screen and seats */}
-          <div className="stage-edge" />
-
-          {/* Screen ambient spill onto "floor" */}
-          <div className="screen-floor-glow" />
-
-          {/* ── Seats ── */}
-          <div className="flex-1 overflow-y-auto min-h-0 cinema-hall-enter">
-            <CinemaHall
-              participants={room.participants}
-              leaderId={room.leaderId}
-              currentUserId={userId}
-              chatEnabled={room.chatEnabled}
-              reactionsEnabled={room.reactionsEnabled}
-              activeBubbles={activeBubbles}
-              floatingReactions={floatingReactions}
-              currentTime={currentVideoTime}
-            />
-          </div>
-        </div>
-
-        {/* Right: Chat — fixed overlay on both mobile and desktop (never pushes video) */}
-        {chatOpen && (
-          <div className="fixed inset-0 z-50 sm:inset-auto sm:right-0 sm:top-14 sm:bottom-0 w-full sm:w-80 flex flex-col border-l border-white/5 bg-cinema-bg/95 backdrop-blur-sm animate-slide-in-right">
+          {/* Chat panel — fixed width, always visible, flush with video */}
+          <div className="w-80 flex-shrink-0 border-l border-white/10 flex flex-col bg-[#0d0f13]">
             <Chat
               messages={room.messages}
               currentUserId={userId}
               chatEnabled={room.chatEnabled}
-              onClose={toggleChat}
+              onClose={() => setLayoutMode('cinema')}
             />
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        /* ── CINEMA MODE: video + seats + optional chat overlay ── */
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+
+          {/* Left: Cinema stage */}
+          <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden cinema-room-stage">
+
+            {/* ── Screen section ── */}
+            <div className="flex-shrink-0 flex justify-center relative cinema-screen-enter px-0 pt-5">
+              <div className="cinema-curtain-l" />
+              <div className="cinema-curtain-r" />
+
+              <div className="cinema-screen-frame" style={{ width: '72%', maxWidth: 'calc(56vh * (16 / 9))' }}>
+                <VideoPlayer
+                  media={media}
+                  serverTime={room.currentTime}
+                  isPlaying={room.isPlaying}
+                  onTimeUpdate={setCurrentVideoTime}
+                  onEnded={() => {}}
+                />
+              </div>
+
+              {/* Up Next banner */}
+              {room.queuedMediaId && (
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 glass-strong rounded-xl px-4 py-2.5 border border-blue-500/20 animate-fade-in">
+                  {room.queuedMediaPoster && (
+                    <img
+                      src={room.queuedMediaPoster}
+                      alt={room.queuedMediaTitle ?? ''}
+                      className="w-8 h-11 object-cover rounded flex-shrink-0"
+                      onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-slate-500 leading-none mb-0.5">Up next</p>
+                    <p className="text-xs font-medium text-cinema-text truncate max-w-[140px]">{room.queuedMediaTitle}</p>
+                  </div>
+                  {isLeader && (
+                    <button
+                      onClick={() => socket.emit('room:play_next')}
+                      className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 transition-colors flex-shrink-0 ml-1"
+                      title="Switch to queued film now"
+                    >
+                      <SkipForward size={14} />
+                      <span className="hidden sm:inline">Play now</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="stage-edge" />
+            <div className="screen-floor-glow" />
+
+            {/* ── Seats ── */}
+            <div className="flex-1 overflow-y-auto min-h-0 cinema-hall-enter">
+              <CinemaHall
+                participants={room.participants}
+                leaderId={room.leaderId}
+                currentUserId={userId}
+                chatEnabled={room.chatEnabled}
+                reactionsEnabled={room.reactionsEnabled}
+                activeBubbles={activeBubbles}
+                floatingReactions={floatingReactions}
+                currentTime={currentVideoTime}
+              />
+            </div>
+          </div>
+
+          {/* Right: Chat overlay */}
+          {chatOpen && (
+            <div className="fixed inset-0 z-50 sm:inset-auto sm:right-0 sm:top-14 sm:bottom-0 w-full sm:w-80 flex flex-col border-l border-white/5 bg-cinema-bg/95 backdrop-blur-sm animate-slide-in-right">
+              <Chat
+                messages={room.messages}
+                currentUserId={userId}
+                chatEnabled={room.chatEnabled}
+                onClose={toggleChat}
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
