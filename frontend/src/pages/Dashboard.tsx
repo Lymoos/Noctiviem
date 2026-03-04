@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Library, Clapperboard, Upload, Plus, Film, Users, Zap, HardDrive } from 'lucide-react'
+import { Library, Clapperboard, Upload, Plus, Film, Users, Zap, HardDrive, Search } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import MediaCard from '../components/MediaCard'
 import DownloadingCard from '../components/DownloadingCard'
@@ -143,19 +143,19 @@ export default function Dashboard() {
       )}
 
       {/* Hero section */}
-      <div className="relative px-6 pt-10 pb-8 overflow-hidden">
+      <div className="relative px-4 sm:px-6 pt-6 sm:pt-10 pb-6 sm:pb-8 overflow-hidden">
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           <div className="absolute -top-20 -left-20 w-96 h-96 rounded-full bg-purple-600/5 blur-3xl" />
           <div className="absolute -top-10 right-20 w-64 h-64 rounded-full bg-blue-600/5 blur-3xl" />
         </div>
         <div className="relative">
-          <h1 className="text-3xl font-bold text-cinema-text">
+          <h1 className="text-2xl sm:text-3xl font-bold text-cinema-text">
             {t.welcomeBackUser}{' '}
             <span className="accent-gradient-text">{nickname}</span>
           </h1>
-          <p className="text-cinema-muted mt-1.5">{t.readyToStart}</p>
+          <p className="text-cinema-muted mt-1.5 text-sm sm:text-base">{t.readyToStart}</p>
 
-          <div className="flex items-center gap-6 mt-5 flex-wrap">
+          <div className="flex items-center gap-3 sm:gap-6 mt-4 sm:mt-5 flex-wrap">
             <div className="flex items-center gap-2 text-sm text-slate-500">
               <Film size={14} className="text-purple-400" />
               <span>{mediaLibrary.filter(m => m.status === 'ready').length} {t.filmsReady}</span>
@@ -173,7 +173,22 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="px-6 pb-16 space-y-12">
+      {/* Mobile search bar — only visible on small screens */}
+      <div className="px-4 pb-2 sm:hidden">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none z-10" />
+          <input
+            type="text"
+            placeholder={t.searchLibrary}
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="input-field py-2 text-sm w-full"
+            style={{ paddingLeft: '2.25rem' }}
+          />
+        </div>
+      </div>
+
+      <div className="px-4 sm:px-6 pb-16 space-y-8 sm:space-y-12">
         {/* ── MY MEDIA LIBRARY ── */}
         <section>
           <div className="section-header">

@@ -30,17 +30,17 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
 
   return (
     <>
-      <nav className="glass-strong sticky top-0 z-50 px-6 py-3 flex items-center gap-4">
+      <nav className="glass-strong sticky top-0 z-50 px-3 sm:px-6 py-3 flex items-center gap-2 sm:gap-4">
         {/* Logo */}
-        <Link to="/" className="flex items-center gap-2 mr-2 flex-shrink-0">
+        <Link to="/" className="flex items-center gap-2 mr-1 sm:mr-2 flex-shrink-0">
           <div className="w-8 h-8 rounded-lg accent-gradient flex items-center justify-center">
             <Film size={16} className="text-white" />
           </div>
-          <span className="font-bold text-lg tracking-tight accent-gradient-text">Noctiviem</span>
+          <span className="font-bold text-lg tracking-tight accent-gradient-text hidden sm:inline">Noctiviem</span>
         </Link>
 
-        {/* Search */}
-        <div className="flex-1 max-w-sm relative">
+        {/* Search — hidden on mobile */}
+        <div className="flex-1 max-w-sm relative hidden sm:block">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none z-10" />
           <input
             type="text"
@@ -54,10 +54,10 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
 
         <div className="flex-1" />
 
-        {/* Language toggle */}
+        {/* Language toggle — hidden on mobile */}
         <button
           onClick={toggleLang}
-          className="btn-ghost text-xs font-semibold px-2"
+          className="btn-ghost text-xs font-semibold px-2 hidden sm:flex"
           title={lang === 'ru' ? 'Switch to English' : 'Переключить на русский'}
         >
           {t.langToggleLabel}
@@ -91,10 +91,10 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
         {/* Create hall */}
         <button
           onClick={onCreateRoom}
-          className="btn-primary flex items-center gap-2 py-2 px-4 text-sm"
+          className="btn-primary flex items-center gap-2 py-2 px-3 sm:px-4 text-sm"
         >
           <Plus size={14} />
-          <span>{t.createHall}</span>
+          <span className="hidden sm:inline">{t.createHall}</span>
         </button>
 
         {/* Profile menu */}

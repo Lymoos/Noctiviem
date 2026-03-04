@@ -116,7 +116,7 @@ export default function AdminPanel() {
       <div className="px-6 py-8 max-w-4xl mx-auto space-y-6">
         {/* Stats row */}
         {!loading && (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="glass rounded-xl p-4">
               <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
                 <HardDrive size={12} className="text-purple-400" />
