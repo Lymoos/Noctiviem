@@ -13,16 +13,27 @@ import db from './db';
 const execFileAsync = promisify(execFile);
 
 /**
- * Run ffmpeg via spawn so we can read stderr progress lines.
- * onProgress(secs) is called with the current encoded time in seconds.
+ * Run ffmpeg via spawn with reliable progress tracking.
+ * - Always passes -y so it never blocks waiting for "overwrite?" input
+ * - Uses -progress pipe:1 -nostats → structured out_time_ms=N on stdout
+ * - stderr is inherited (goes straight to server console for debugging)
+ * - onProgress(secs) is called with the current encoded position in seconds
  */
 function ffmpegSpawn(
   args: string[],
   { timeout = 3 * 60 * 60 * 1000, onProgress }: { timeout?: number; onProgress?: (secs: number) => void } = {},
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderrTail = '';
+    const proc = spawn('ffmpeg', [
+      '-y',                   // never prompt for overwrite — prevents hangs on stale tmp files
+      '-progress', 'pipe:1',  // write progress key=value pairs to stdout
+      '-nostats',             // suppress noisy stderr progress lines (errors still show)
+      ...args,
+    ], {
+      stdio: ['ignore', 'pipe', 'inherit'], // stderr → server console so we see errors
+    });
+
+    let stdoutBuf = '';
     let timedOut = false;
 
     const timer = setTimeout(() => {
@@ -31,21 +42,24 @@ function ffmpegSpawn(
       reject(new Error(`ffmpeg timed out after ${Math.round(timeout / 60000)} min`));
     }, timeout);
 
-    proc.stderr!.on('data', (chunk: Buffer) => {
-      stderrTail = (stderrTail + chunk.toString()).slice(-800);
+    // Must always drain stdout — if we don't read it, the pipe fills and ffmpeg blocks
+    proc.stdout!.on('data', (chunk: Buffer) => {
+      stdoutBuf += chunk.toString();
       if (!onProgress) return;
-      const m = stderrTail.match(/time=(\d+):(\d+):([\d.]+)/);
-      if (m) {
-        const secs = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseFloat(m[3]);
-        onProgress(secs);
+      // -progress outputs lines like:  out_time_ms=12345678
+      const lines = stdoutBuf.split('\n');
+      stdoutBuf = lines.pop() ?? '';
+      for (const line of lines) {
+        const m = line.match(/^out_time_ms=(\d+)/);
+        if (m) onProgress(parseInt(m[1]) / 1_000_000);
       }
     });
 
-    proc.on('close', code => {
+    proc.on('close', (code, signal) => {
       clearTimeout(timer);
       if (timedOut) return;
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited with code ${code}\n${stderrTail.slice(-300)}`));
+      else reject(new Error(`ffmpeg exited with code ${code} (signal: ${signal})`));
     });
 
     proc.on('error', err => { clearTimeout(timer); reject(err); });
@@ -266,11 +280,18 @@ dl.setOnCompleted(async (item) => {
     // Helper: emit progress percentage to all clients
     const emitProgress = (pct: number) => io.emit('media:progress', { id: tempId, pct: Math.min(99, pct) });
 
+    // Probe duration before remuxing so progress % is accurate
+    let estDuration = 0;
+    try {
+      const pre = await probeVideoFile(filePath);
+      estDuration = pre.duration;
+    } catch { /* best-effort — progress just won't show % */ }
+
     // Remux to MP4 (stream copy + AAC audio)
     let remuxFailed = false;
     try {
       filePath = await remuxToMp4(filePath, secs => {
-        if (tempItem.duration > 0) emitProgress(Math.round((secs / tempItem.duration) * 80)); // 0→80%
+        if (estDuration > 0) emitProgress(Math.round((secs / estDuration) * 80)); // 0→80%
       });
     } catch (e: any) {
       console.error('[remux] failed:', e.message);
@@ -281,8 +302,8 @@ dl.setOnCompleted(async (item) => {
     if (!remuxFailed && path.extname(filePath).toLowerCase() === '.mp4') {
       try {
         if (await needsAudioFix(filePath)) {
-          // Probe duration first so we can show percentage
-          const { duration: dur } = await probeVideoFile(filePath);
+          // Use pre-probed duration; re-probe if we didn't get it earlier (e.g. file was already .mp4)
+          const dur = estDuration > 0 ? estDuration : (await probeVideoFile(filePath)).duration;
           await fixAudioInPlace(filePath, secs => {
             if (dur > 0) emitProgress(80 + Math.round((secs / dur) * 18)); // 80→98%
           });
