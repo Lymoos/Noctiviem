@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Minimize,
   Headphones, Subtitles, Wifi, ChevronDown, ChevronUp,
-  Gauge
+  Gauge, RotateCcw, RotateCw
 } from 'lucide-react'
 import { MediaItem, Reaction } from '../types'
 import { socket } from '../socket'
@@ -156,6 +156,15 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
     setSubsMenuOpen(false)
   }
 
+  const handleSkip = (seconds: number) => {
+    if (!isLeader) return
+    const video = videoRef.current
+    if (!video) return
+    const newTime = Math.max(0, Math.min(video.currentTime + seconds, duration))
+    video.currentTime = newTime
+    socket.emit('room:seek', { currentTime: newTime })
+  }
+
   const handleQuality = (q: string) => {
     if (!isLeader) return
     socket.emit('room:quality', { quality: q })
@@ -287,6 +296,28 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
             className={`flex-shrink-0 ${isLeader ? 'text-white hover:text-purple-300' : 'text-white/30 cursor-not-allowed'} transition-colors`}
           >
             {isPlaying ? <Pause size={20} /> : <Play size={20} fill="currentColor" />}
+          </button>
+
+          {/* Skip back 5s */}
+          <button
+            onClick={() => handleSkip(-5)}
+            disabled={!isLeader}
+            title="-5 seconds"
+            className={`relative flex-shrink-0 ${isLeader ? 'text-white/70 hover:text-white' : 'text-white/20 cursor-not-allowed'} transition-colors`}
+          >
+            <RotateCcw size={16} />
+            <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[8px] font-bold leading-none">5</span>
+          </button>
+
+          {/* Skip forward 15s */}
+          <button
+            onClick={() => handleSkip(15)}
+            disabled={!isLeader}
+            title="+15 seconds"
+            className={`relative flex-shrink-0 ${isLeader ? 'text-white/70 hover:text-white' : 'text-white/20 cursor-not-allowed'} transition-colors`}
+          >
+            <RotateCw size={16} />
+            <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 text-[8px] font-bold leading-none">15</span>
           </button>
 
           {/* Volume */}
