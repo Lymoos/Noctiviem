@@ -21,6 +21,8 @@ model User {
   autoSyncOnJoin         Boolean        @default(true)
   isPrivate              Boolean        @default(false)
   specialRole            String?
+  avatarStyle            String         @default("thumbs")
+  seatColor              String         @default("default")
   createdAt              DateTime       @default(now())
 
   watchHistory           WatchHistory[]

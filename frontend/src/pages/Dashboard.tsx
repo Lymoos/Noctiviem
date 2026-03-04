@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Library, Clapperboard, Upload, Plus, Film, Users, Zap, HardDrive, Search } from 'lucide-react'
+import { Library, Clapperboard, Upload, Plus, Film, Users, Zap, HardDrive, Search, Play, Pause, Lock, KeyRound, MonitorPlay } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import MediaCard from '../components/MediaCard'
 import DownloadingCard from '../components/DownloadingCard'
@@ -9,7 +9,7 @@ import CreateRoomModal from '../components/CreateRoomModal'
 import { useStore, apiFetch, apiDelete, apiPost } from '../store'
 import { translations } from '../i18n'
 import { socket, connectSocket } from '../socket'
-import { MediaItem, RoomState, User } from '../types'
+import { MediaItem, RoomState, User, ActiveSession } from '../types'
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`
@@ -41,6 +41,7 @@ export default function Dashboard() {
   const [preselectedMedia, setPreselectedMedia] = useState<string | undefined>()
   const [myRooms, setMyRooms] = useState<{ id: string; name: string; mediaTitle: string; mediaPoster: string; participantCount: number; maxParticipants: number; isPlaying: boolean; isLocked: boolean; isLeader: boolean }[]>([])
   const [storageBytes, setStorageBytes] = useState<number | null>(null)
+  const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([])
 
   useEffect(() => {
     apiFetch<MediaItem[]>('/api/media')
@@ -59,6 +60,18 @@ export default function Dashboard() {
       .catch(() => {})
   }, [mediaLibrary.length, downloads.length])
 
+  // Active sessions browser — refresh every 10s
+  useEffect(() => {
+    const load = () => {
+      apiFetch<{ rooms: ActiveSession[] }>('/api/rooms/public')
+        .then(r => { if (r.rooms) setActiveSessions(r.rooms) })
+        .catch(() => {})
+    }
+    load()
+    const interval = setInterval(load, 10_000)
+    return () => clearInterval(interval)
+  }, [])
+
   useEffect(() => {
     connectSocket()
 
@@ -69,7 +82,7 @@ export default function Dashboard() {
     return () => { socket.off('media:updated') }
   }, [setMediaLibrary])
 
-  const handleCreateRoom = useCallback((data: { name: string; mediaId: string; maxParticipants: number }) => {
+  const handleCreateRoom = useCallback((data: { name: string; mediaId: string; maxParticipants: number; password?: string; friendsOnly?: boolean }) => {
     setCreateModalOpen(false)
     setCreateError(null)
 
@@ -189,6 +202,74 @@ export default function Dashboard() {
       </div>
 
       <div className="px-4 sm:px-6 pb-16 space-y-8 sm:space-y-12">
+        {/* ── ACTIVE SESSIONS BROWSER ── */}
+        <section>
+          <div className="section-header">
+            <MonitorPlay size={16} className="text-blue-400" />
+            <h2 className="section-title">{t.activeSessions}</h2>
+            <div className="section-line" />
+            {activeSessions.length > 0 && (
+              <span className="text-xs text-slate-500">{activeSessions.length}</span>
+            )}
+          </div>
+
+          {activeSessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <div className="w-12 h-12 rounded-2xl bg-cinema-card flex items-center justify-center mb-3 opacity-30">
+                <MonitorPlay size={20} className="text-slate-500" />
+              </div>
+              <p className="text-cinema-muted text-sm">{t.noActiveSessions}</p>
+              <p className="text-xs text-slate-600 mt-1">{t.noActiveSessionsDesc}</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {activeSessions.map(session => (
+                <div
+                  key={session.id}
+                  className="glass-strong rounded-xl overflow-hidden border border-white/5 hover:border-purple-500/20 transition-all group"
+                >
+                  <div className="relative h-20 overflow-hidden">
+                    <img
+                      src={session.mediaPoster}
+                      alt={session.mediaTitle}
+                      className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity"
+                      onError={e => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${session.id}/400/200` }}
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-cinema-bg/90 to-transparent" />
+                    <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between">
+                      <span className="text-xs text-white font-medium truncate mr-2">{session.name}</span>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {session.isLocked && <Lock size={10} className="text-red-400" />}
+                        {session.hasPassword && <KeyRound size={10} className="text-yellow-400" />}
+                        {session.isPlaying
+                          ? <Play size={10} className="text-green-400" />
+                          : <Pause size={10} className="text-slate-400" />
+                        }
+                      </div>
+                    </div>
+                  </div>
+                  <div className="px-3 pb-3 pt-2">
+                    <p className="text-xs text-cinema-muted truncate mb-2">{session.mediaTitle}</p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1 text-xs text-slate-500">
+                        <Users size={11} />
+                        <span>{session.participantCount}/{session.maxParticipants}</span>
+                      </div>
+                      <button
+                        onClick={() => navigate(`/join/${session.inviteCode}`)}
+                        disabled={session.isLocked || session.participantCount >= session.maxParticipants}
+                        className="btn-primary text-xs py-1 px-3 disabled:opacity-40"
+                      >
+                        {t.joinSession}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
         {/* ── MY MEDIA LIBRARY ── */}
         <section>
           <div className="section-header">

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Users, Lock, Film, ArrowRight, Edit2 } from 'lucide-react'
+import { Users, Lock, Film, ArrowRight, Edit2, KeyRound, UserCheck } from 'lucide-react'
 import { socket, connectSocket } from '../socket'
 import { useStore } from '../store'
 import { RoomState, MediaItem, User } from '../types'
@@ -13,6 +13,8 @@ interface RoomPreview {
   participantCount: number
   maxParticipants: number
   isLocked: boolean
+  hasPassword: boolean
+  friendsOnly: boolean
 }
 
 export default function Join() {
@@ -25,6 +27,7 @@ export default function Join() {
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [guestNickname, setGuestNickname] = useState('')
+  const [password, setPassword] = useState('')
 
   useEffect(() => { setGuestNickname(storedNickname) }, [storedNickname])
 
@@ -43,6 +46,7 @@ export default function Join() {
 
   const handleJoin = () => {
     if (!preview || !effectiveNickname.trim()) return
+    if (preview.hasPassword && !password.trim()) return
     if (!isAuthenticated && guestNickname.trim()) {
       localStorage.setItem('noctiviem_nickname', guestNickname.trim())
     }
@@ -50,7 +54,7 @@ export default function Join() {
     connectSocket()
 
     const join = () => {
-      socket.emit('room:join', { roomId: preview.id }, (res: {
+      socket.emit('room:join', { roomId: preview.id, password: password || undefined }, (res: {
         room: RoomState; user: User; media: MediaItem; userId: string; error?: string
       }) => {
         if (res.error) { setError(res.error); setJoining(false); return }
@@ -86,6 +90,8 @@ export default function Join() {
       </div>
     )
   }
+
+  const canJoin = !preview.isLocked && !!effectiveNickname.trim() && (!preview.hasPassword || !!password.trim())
 
   return (
     <div className="min-h-screen bg-cinema-bg flex items-center justify-center p-4">
@@ -123,16 +129,28 @@ export default function Join() {
 
           {/* Body */}
           <div className="p-6">
-            <div className="flex items-center justify-between mb-5">
+            <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
               <div className="flex items-center gap-2 text-sm text-slate-400">
                 <Users size={14} />
                 <span>{preview.participantCount}/{preview.maxParticipants} viewers</span>
               </div>
-              {preview.isLocked && (
-                <div className="flex items-center gap-1.5 text-sm text-red-400">
-                  <Lock size={14} /><span>Hall is locked</span>
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                {preview.isLocked && (
+                  <div className="flex items-center gap-1.5 text-sm text-red-400">
+                    <Lock size={14} /><span>Hall is locked</span>
+                  </div>
+                )}
+                {preview.hasPassword && !preview.isLocked && (
+                  <div className="flex items-center gap-1.5 text-sm text-yellow-400">
+                    <KeyRound size={14} /><span>Password required</span>
+                  </div>
+                )}
+                {preview.friendsOnly && !preview.isLocked && (
+                  <div className="flex items-center gap-1.5 text-sm text-blue-400">
+                    <UserCheck size={14} /><span>Friends only</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {isAuthenticated ? (
@@ -154,18 +172,43 @@ export default function Join() {
                   type="text"
                   value={guestNickname}
                   onChange={e => setGuestNickname(e.target.value.slice(0, 24))}
-                  onKeyDown={e => e.key === 'Enter' && !preview.isLocked && handleJoin()}
+                  onKeyDown={e => e.key === 'Enter' && canJoin && handleJoin()}
                   placeholder="Your nickname…"
                   className="input-field w-full mb-1"
                   autoFocus maxLength={24}
                 />
-                <p className="text-xs text-slate-600 mb-5">No account needed — joining as guest</p>
+                <p className="text-xs text-slate-600 mb-4">No account needed — joining as guest</p>
               </>
+            )}
+
+            {/* Password input */}
+            {preview.hasPassword && (
+              <div className="mb-5">
+                <div className="text-xs text-slate-500 mb-2 flex items-center gap-1">
+                  <KeyRound size={11} /> Hall password
+                </div>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && canJoin && handleJoin()}
+                  placeholder="Enter password…"
+                  className="input-field w-full"
+                  style={{ paddingLeft: '14px' }}
+                  autoFocus={isAuthenticated}
+                />
+              </div>
+            )}
+
+            {error && (
+              <div className="mb-4 flex items-center gap-2 text-sm text-red-400 bg-red-900/15 border border-red-500/20 rounded-lg px-3 py-2">
+                <span>⚠</span><span>{error}</span>
+              </div>
             )}
 
             <button
               onClick={handleJoin}
-              disabled={joining || preview.isLocked || !effectiveNickname.trim()}
+              disabled={joining || !canJoin}
               className="btn-primary w-full flex items-center justify-center gap-2"
             >
               {joining

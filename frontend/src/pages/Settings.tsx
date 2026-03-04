@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { User, Sliders, Download, Trash2, LogOut, Save, Eye, EyeOff, Film, ChevronDown } from 'lucide-react'
+import { User, Sliders, Download, Trash2, LogOut, Save, Eye, EyeOff, Film, ChevronDown, RefreshCw } from 'lucide-react'
 import { useStore, apiPatch, apiDelete } from '../store'
 import { translations } from '../i18n'
+import { randomUUID } from '../utils'
 
 type Tab = 'profile' | 'playback' | 'downloads' | 'account'
 
@@ -83,6 +84,9 @@ export default function Settings() {
   const [newPw, setNewPw] = useState('')
   const [showNewPw, setShowNewPw] = useState(false)
   const [isPrivate, setIsPrivate] = useState(account?.settings.isPrivate ?? false)
+  const [avatarStyle, setAvatarStyle] = useState(account?.settings.avatarStyle ?? 'thumbs')
+  const [avatarSeed, setAvatarSeed] = useState(account?.settings.avatarSeed ?? '')
+  const [seatColor, setSeatColor] = useState(account?.settings.seatColor ?? 'default')
 
   const [defaultQuality, setDefaultQuality] = useState(account?.settings.defaultQuality ?? 'Auto')
   const [defaultAudioLang, setDefaultAudioLang] = useState(account?.settings.defaultAudioLang ?? 'und')
@@ -100,7 +104,7 @@ export default function Settings() {
     e.preventDefault()
     setError(null)
     setSaving(true)
-    const body: Record<string, unknown> = { nickname, email, isPrivate }
+    const body: Record<string, unknown> = { nickname, email, isPrivate, avatarStyle, avatarSeed, seatColor }
     if (newPw) { body.currentPassword = currentPw; body.newPassword = newPw }
     const r = await apiPatch<{ user: typeof account }>('/api/auth/settings', body)
     setSaving(false)
@@ -298,6 +302,73 @@ export default function Settings() {
               >
                 <span className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${isPrivate ? 'translate-x-5' : 'translate-x-0'}`} />
               </button>
+            </div>
+
+            <hr className="border-white/5" />
+
+            {/* Avatar style picker */}
+            <div>
+              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">{t.avatarStyle}</label>
+              <div className="grid grid-cols-4 gap-2 mb-2">
+                {(['thumbs','avataaars','pixel-art','adventurer','big-smile','fun-emoji','croodles','shapes'] as const).map(style => (
+                  <button
+                    key={style}
+                    type="button"
+                    onClick={() => setAvatarStyle(style)}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-lg border transition-all ${
+                      avatarStyle === style
+                        ? 'border-purple-500/60 bg-purple-600/15'
+                        : 'border-white/5 bg-white/3 hover:bg-white/6'
+                    }`}
+                  >
+                    <img
+                      src={`https://api.dicebear.com/7.x/${style}/svg?seed=${avatarSeed || account?.id || 'preview'}`}
+                      alt={style}
+                      className="w-10 h-10 rounded-full"
+                      onError={e => { (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/thumbs/svg?seed=preview` }}
+                    />
+                    <span className="text-[10px] text-cinema-muted capitalize">{style.replace('-', ' ')}</span>
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setAvatarSeed(randomUUID())}
+                className="btn-ghost text-xs flex items-center gap-1.5 py-1"
+              >
+                <RefreshCw size={11} />
+                {t.regenerateAvatar}
+              </button>
+            </div>
+
+            <hr className="border-white/5" />
+
+            {/* Seat color picker */}
+            <div>
+              <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">{t.seatColor}</label>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { value: 'default', label: 'Фиолет.', color: '#7c3aed' },
+                  { value: 'crimson', label: 'Алый', color: '#dc2626' },
+                  { value: 'ocean',   label: 'Океан', color: '#2563eb' },
+                  { value: 'emerald', label: 'Изумруд', color: '#059669' },
+                  { value: 'gold',    label: 'Золото', color: '#d97706' },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setSeatColor(opt.value)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all ${
+                      seatColor === opt.value
+                        ? 'border-white/30 bg-white/10 text-cinema-text'
+                        : 'border-white/5 bg-white/3 text-cinema-muted hover:bg-white/6'
+                    }`}
+                  >
+                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: opt.color }} />
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <button type="submit" disabled={saving} className="btn-primary w-full flex items-center justify-center gap-2">

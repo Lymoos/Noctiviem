@@ -97,6 +97,38 @@ export const translations = {
     importTorrentFirst: 'Сначала импортируйте торрент на странице загрузок',
     seatLimit: 'Лимит мест',
     cancel: 'Отмена',
+    privacy: 'Приватность',
+    publicRoom: 'Открытый',
+    publicRoomDesc: 'Виден всем в браузере сессий',
+    passwordRoom: 'Пароль',
+    passwordRoomDesc: 'Нужен пароль для входа',
+    friendsOnly: 'Только друзья',
+    friendsOnlyDesc: 'Только ваши друзья могут войти',
+    roomPassword: 'Пароль зала',
+    enterPassword: 'Введите пароль…',
+
+    // Sessions browser
+    activeSessions: 'Активные сессии',
+    noActiveSessions: 'Нет активных сессий',
+    noActiveSessionsDesc: 'Создайте зал — и он появится здесь',
+    joinSession: 'Войти',
+    viewers: 'зрителей',
+    playing: 'играет',
+    paused: 'пауза',
+
+    // Customization (Settings profile)
+    avatarStyle: 'Стиль аватара',
+    seatColor: 'Цвет кресла',
+    regenerateAvatar: 'Обновить аватар',
+
+    // Friends / user search
+    findFriends: 'Найти друзей',
+    searchUsers: 'Поиск по нику или логину…',
+    addFriend: 'Добавить',
+    removeFriend: 'Удалить',
+    friendAdded: 'В друзьях',
+    noUsersFound: 'Пользователи не найдены',
+    searchMin2: 'Введите минимум 2 символа',
 
     // MediaCard
     processingDots: 'Обработка…',
@@ -235,6 +267,38 @@ export const translations = {
     importTorrentFirst: 'Import a torrent first from the Downloads section',
     seatLimit: 'Seat Limit',
     cancel: 'Cancel',
+    privacy: 'Privacy',
+    publicRoom: 'Public',
+    publicRoomDesc: 'Visible to everyone in the sessions browser',
+    passwordRoom: 'Password',
+    passwordRoomDesc: 'Requires a password to join',
+    friendsOnly: 'Friends only',
+    friendsOnlyDesc: 'Only your friends can join',
+    roomPassword: 'Hall password',
+    enterPassword: 'Enter password…',
+
+    // Sessions browser
+    activeSessions: 'Active Sessions',
+    noActiveSessions: 'No active sessions',
+    noActiveSessionsDesc: 'Create a hall and it will appear here',
+    joinSession: 'Join',
+    viewers: 'viewers',
+    playing: 'playing',
+    paused: 'paused',
+
+    // Customization (Settings profile)
+    avatarStyle: 'Avatar style',
+    seatColor: 'Seat color',
+    regenerateAvatar: 'Regenerate avatar',
+
+    // Friends / user search
+    findFriends: 'Find friends',
+    searchUsers: 'Search by nickname or username…',
+    addFriend: 'Add',
+    removeFriend: 'Remove',
+    friendAdded: 'Friends',
+    noUsersFound: 'No users found',
+    searchMin2: 'Type at least 2 characters',
 
     // MediaCard
     processingDots: 'Processing…',

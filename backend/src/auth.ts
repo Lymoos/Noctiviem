@@ -25,6 +25,8 @@ export interface PublicUser {
   settings: {
     nickname: string;
     avatarSeed: string;
+    avatarStyle: string;
+    seatColor: string;
     defaultQuality: string;
     defaultAudioLang: string;
     defaultSubsLang: string;
@@ -47,8 +49,8 @@ export interface UserProfile {
 
 type DbUser = {
   id: string; username: string; email: string; passwordHash: string;
-  nickname: string; avatarSeed: string; defaultQuality: string;
-  defaultAudioLang: string; defaultSubsLang: string;
+  nickname: string; avatarSeed: string; avatarStyle: string; seatColor: string;
+  defaultQuality: string; defaultAudioLang: string; defaultSubsLang: string;
   maxConcurrentDownloads: number; autoSyncOnJoin: boolean;
   isPrivate: boolean; createdAt: Date;
 };
@@ -63,6 +65,8 @@ function toPublic(u: DbUser): PublicUser {
     settings: {
       nickname: u.nickname,
       avatarSeed: u.avatarSeed,
+      avatarStyle: u.avatarStyle,
+      seatColor: u.seatColor,
       defaultQuality: u.defaultQuality,
       defaultAudioLang: u.defaultAudioLang,
       defaultSubsLang: u.defaultSubsLang,
@@ -140,6 +144,8 @@ export async function updateSettings(
     email?: string;
     nickname?: string;
     avatarSeed?: string;
+    avatarStyle?: string;
+    seatColor?: string;
     defaultQuality?: string;
     defaultAudioLang?: string;
     defaultSubsLang?: string;
@@ -176,6 +182,8 @@ export async function updateSettings(
 
   if (body.nickname !== undefined) data.nickname = body.nickname;
   if (body.avatarSeed !== undefined) data.avatarSeed = body.avatarSeed;
+  if (body.avatarStyle !== undefined) data.avatarStyle = body.avatarStyle;
+  if (body.seatColor !== undefined) data.seatColor = body.seatColor;
   if (body.defaultQuality !== undefined) data.defaultQuality = body.defaultQuality;
   if (body.defaultAudioLang !== undefined) data.defaultAudioLang = body.defaultAudioLang;
   if (body.defaultSubsLang !== undefined) data.defaultSubsLang = body.defaultSubsLang;
@@ -236,6 +244,22 @@ export async function addFriend(requesterId: string, addresseeId: string): Promi
       update: {},
     });
     return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function areFriends(userId1: string, userId2: string): Promise<boolean> {
+  try {
+    const f = await db.friendship.findFirst({
+      where: {
+        OR: [
+          { requesterId: userId1, addresseeId: userId2 },
+          { requesterId: userId2, addresseeId: userId1 },
+        ],
+      },
+    });
+    return !!f;
   } catch {
     return false;
   }

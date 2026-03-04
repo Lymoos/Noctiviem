@@ -6,6 +6,7 @@ export interface User {
   seatNumber: number;
   socketId: string;
   specialRole?: string | null;
+  seatColor?: string;
 }
 
 export interface Message {
@@ -53,6 +54,8 @@ export interface RoomState {
   queuedMediaId: string | null;
   queuedMediaTitle: string | null;
   queuedMediaPoster: string | null;
+  password: string | null;
+  friendsOnly: boolean;
   createdAt: number;
   updatedAt: number;
 }

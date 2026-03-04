@@ -285,7 +285,7 @@ function SeatItem({
 
       {/* Seat body */}
       <div
-        className={`seat-base ${isOccupied ? (isThisLeader ? 'leader' : 'occupied') : ''} ${
+        className={`seat-base ${isOccupied ? (isThisLeader ? 'leader' : `occupied seat-${participant?.seatColor || 'default'}`) : ''} ${
           waveActive ? 'animate-wave' : ''
         }`}
         style={waveActive ? { animationDelay: `${waveDelay}ms` } : undefined}

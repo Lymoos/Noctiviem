@@ -1,14 +1,16 @@
 import { useState } from 'react'
-import { X, Users, Film, Download } from 'lucide-react'
+import { X, Film, Download, Globe, Lock, UserCheck } from 'lucide-react'
 import { MediaItem } from '../types'
 import { useStore } from '../store'
 import { translations } from '../i18n'
+
+type PrivacyMode = 'public' | 'password' | 'friends'
 
 interface CreateRoomModalProps {
   media: MediaItem[]
   preselectedMediaId?: string
   onClose: () => void
-  onCreate: (data: { name: string; mediaId: string; maxParticipants: number }) => void
+  onCreate: (data: { name: string; mediaId: string; maxParticipants: number; password?: string; friendsOnly?: boolean }) => void
 }
 
 export default function CreateRoomModal({ media, preselectedMediaId, onClose, onCreate }: CreateRoomModalProps) {
@@ -18,14 +20,22 @@ export default function CreateRoomModal({ media, preselectedMediaId, onClose, on
   const [name, setName] = useState<string>(t.movieNight)
   const [mediaId, setMediaId] = useState(preselectedMediaId || readyMedia[0]?.id || '')
   const [maxParticipants, setMaxParticipants] = useState(20)
-
-  const selectedMedia = readyMedia.find(m => m.id === mediaId)
+  const [privacy, setPrivacy] = useState<PrivacyMode>('public')
+  const [password, setPassword] = useState('')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!mediaId) return
-    onCreate({ name: name.trim() || t.movieNight, mediaId, maxParticipants })
+    const pw = privacy === 'password' ? password.trim() : undefined
+    const friendsOnly = privacy === 'friends'
+    onCreate({ name: name.trim() || t.movieNight, mediaId, maxParticipants, password: pw || undefined, friendsOnly })
   }
+
+  const privacyOptions: { value: PrivacyMode; icon: React.ReactNode; label: string; desc: string }[] = [
+    { value: 'public',   icon: <Globe size={13} />,    label: t.publicRoom,   desc: t.publicRoomDesc },
+    { value: 'password', icon: <Lock size={13} />,     label: t.passwordRoom, desc: t.passwordRoomDesc },
+    { value: 'friends',  icon: <UserCheck size={13} />, label: t.friendsOnly,  desc: t.friendsOnlyDesc },
+  ]
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -122,12 +132,49 @@ export default function CreateRoomModal({ media, preselectedMediaId, onClose, on
             </div>
           </div>
 
+          {/* Privacy */}
+          <div>
+            <label className="block text-xs text-slate-500 uppercase tracking-wide mb-2">{t.privacy}</label>
+            <div className="grid grid-cols-3 gap-2">
+              {privacyOptions.map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setPrivacy(opt.value)}
+                  className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-xs transition-all ${
+                    privacy === opt.value
+                      ? 'border-purple-500/60 bg-purple-600/15 text-purple-300'
+                      : 'border-white/5 bg-white/3 text-cinema-muted hover:bg-white/6'
+                  }`}
+                >
+                  {opt.icon}
+                  <span className="font-medium">{opt.label}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-slate-600 mt-1.5">
+              {privacyOptions.find(o => o.value === privacy)?.desc}
+            </p>
+            {privacy === 'password' && (
+              <input
+                type="text"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="input-field mt-2 text-sm"
+                placeholder={t.enterPassword}
+                maxLength={32}
+                style={{ paddingLeft: '14px' }}
+                required
+              />
+            )}
+          </div>
+
           {/* Actions */}
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onClose} className="btn-secondary flex-1">
               {t.cancel}
             </button>
-            <button type="submit" disabled={!mediaId} className="btn-primary flex-1 flex items-center justify-center gap-2">
+            <button type="submit" disabled={!mediaId || (privacy === 'password' && !password.trim())} className="btn-primary flex-1 flex items-center justify-center gap-2">
               <Film size={14} />
               {t.createHall}
             </button>

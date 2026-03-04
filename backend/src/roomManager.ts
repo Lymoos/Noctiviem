@@ -21,18 +21,26 @@ export function createRoom(
   leaderSocketId: string,
   leaderNickname: string,
   leaderSpecialRole?: string | null,
+  leaderAvatarStyle?: string,
+  leaderAvatarSeed?: string,
+  leaderSeatColor?: string,
+  password?: string | null,
+  friendsOnly?: boolean,
 ): RoomState {
   const id = uuidv4();
   const inviteCode = generateInviteCode();
+  const style = leaderAvatarStyle || 'thumbs';
+  const seed = leaderAvatarSeed || leaderId;
 
   const leader: User = {
     id: leaderId,
     nickname: leaderNickname,
-    avatar: `https://api.dicebear.com/7.x/thumbs/svg?seed=${leaderId}&backgroundColor=7c3aed,3b82f6`,
+    avatar: `https://api.dicebear.com/7.x/${style}/svg?seed=${seed}&backgroundColor=7c3aed,3b82f6`,
     isLeader: true,
     seatNumber: 1,
     socketId: leaderSocketId,
     specialRole: leaderSpecialRole ?? null,
+    seatColor: leaderSeatColor ?? 'default',
   };
 
   const room: RoomState = {
@@ -60,6 +68,8 @@ export function createRoom(
     queuedMediaId: null,
     queuedMediaTitle: null,
     queuedMediaPoster: null,
+    password: password ?? null,
+    friendsOnly: friendsOnly ?? false,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -85,6 +95,9 @@ export function joinRoom(
   socketId: string,
   nickname: string,
   specialRole?: string | null,
+  avatarStyle?: string,
+  avatarSeed?: string,
+  seatColor?: string,
 ): { room: RoomState; user: User } | { error: string } {
   const room = rooms.get(roomId);
   if (!room) return { error: 'Room not found' };
@@ -97,9 +110,10 @@ export function joinRoom(
 
   const existing = room.participants.find(p => p.id === userId);
   if (existing) {
-    // Reconnecting user — update socketId and refresh specialRole
+    // Reconnecting user — update socketId and refresh special fields
     existing.socketId = socketId;
     if (specialRole !== undefined) existing.specialRole = specialRole;
+    if (seatColor !== undefined) existing.seatColor = seatColor;
     return { room, user: existing };
   }
 
@@ -110,19 +124,27 @@ export function joinRoom(
   let seatNumber = 1;
   while (occupiedSeats.has(seatNumber)) seatNumber++;
 
+  const style = avatarStyle || 'thumbs';
+  const seed = avatarSeed || userId;
+
   const user: User = {
     id: userId,
     nickname,
-    avatar: `https://api.dicebear.com/7.x/thumbs/svg?seed=${userId}&backgroundColor=0f1115`,
+    avatar: `https://api.dicebear.com/7.x/${style}/svg?seed=${seed}&backgroundColor=0f1115`,
     isLeader: false,
     seatNumber,
     socketId,
     specialRole: specialRole ?? null,
+    seatColor: seatColor ?? 'default',
   };
 
   room.participants.push(user);
   room.updatedAt = Date.now();
   return { room, user };
+}
+
+export function getAllPublicRooms(): RoomState[] {
+  return [...rooms.values()].filter(r => !r.friendsOnly);
 }
 
 export function queueMedia(

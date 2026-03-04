@@ -746,6 +746,28 @@ body::before {
   box-shadow: 0 0 14px rgba(124,58,237,0.45), inset 0 0 8px rgba(124,58,237,0.1);
 }
 
+/* Seat color variants — occupied seats */
+.seat-base.occupied.seat-default {
+  background: rgba(124,58,237,0.14);
+  border-color: rgba(124,58,237,0.28);
+}
+.seat-base.occupied.seat-crimson {
+  background: rgba(220,38,38,0.18);
+  border-color: rgba(220,38,38,0.40);
+}
+.seat-base.occupied.seat-ocean {
+  background: rgba(37,99,235,0.18);
+  border-color: rgba(37,99,235,0.40);
+}
+.seat-base.occupied.seat-emerald {
+  background: rgba(5,150,105,0.18);
+  border-color: rgba(5,150,105,0.40);
+}
+.seat-base.occupied.seat-gold {
+  background: rgba(217,119,6,0.18);
+  border-color: rgba(217,119,6,0.40);
+}
+
 /* ─── Милое солнышко — sparkle cluster above avatar ────────────────────────── */
 .sparkle-cluster {
   position: absolute;

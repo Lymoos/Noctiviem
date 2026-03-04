@@ -600,7 +600,44 @@ app.get('/api/rooms/invite/:code', (req, res) => {
     id: room.id, name: room.name, mediaTitle: room.mediaTitle,
     mediaPoster: room.mediaPoster, participantCount: room.participants.length,
     maxParticipants: room.maxParticipants, isLocked: room.isLocked, leaderId: room.leaderId,
+    hasPassword: !!room.password, friendsOnly: room.friendsOnly,
   });
+});
+
+// ── Active rooms browser (authenticated, non-friends-only rooms) ──────────────
+app.get('/api/rooms/public', requireAuth, (_req, res) => {
+  const rooms = rm.getAllPublicRooms().map(r => ({
+    id: r.id,
+    name: r.name,
+    mediaTitle: r.mediaTitle,
+    mediaPoster: r.mediaPoster,
+    participantCount: r.participants.length,
+    maxParticipants: r.maxParticipants,
+    isPlaying: r.isPlaying,
+    isLocked: r.isLocked,
+    hasPassword: !!r.password,
+    leaderId: r.leaderId,
+    inviteCode: r.inviteCode,
+    createdAt: r.createdAt,
+  }));
+  res.json({ rooms });
+});
+
+// ── User search ───────────────────────────────────────────────────────────────
+app.get('/api/users/search', requireAuth, async (req, res) => {
+  const q = ((req.query.q as string) || '').trim();
+  if (q.length < 2) { res.json({ users: [] }); return; }
+  const users = await db.user.findMany({
+    where: {
+      OR: [
+        { nickname: { contains: q, mode: 'insensitive' } },
+        { username: { contains: q, mode: 'insensitive' } },
+      ],
+    },
+    select: { id: true, username: true, nickname: true, avatarSeed: true, avatarStyle: true },
+    take: 20,
+  });
+  res.json({ users });
 });
 
 // ── Socket.io download broadcast ─────────────────────────────────────────────
@@ -627,23 +664,29 @@ io.on('connection', socket => {
 
   console.log(`[+] ${nickname} (${socket.id})`);
 
-  socket.on('room:create', async (data: { name: string; mediaId: string; maxParticipants?: number }, cb) => {
+  socket.on('room:create', async (data: { name: string; mediaId: string; maxParticipants?: number; password?: string; friendsOnly?: boolean }, cb) => {
     const media = mediaLibrary.find(m => m.id === data.mediaId);
     if (!media) { cb({ error: 'Media not found' }); return; }
     if (media.status !== 'ready') { cb({ error: 'Media is not ready' }); return; }
-    // Look up specialRole for authenticated users
+    // Look up user info for authenticated users
     let specialRole: string | null = null;
+    let avatarStyle = 'thumbs';
+    let avatarSeed = socket.data.userId;
+    let seatColor = 'default';
     try {
-      const dbUser = await db.user.findUnique({ where: { id: socket.data.userId }, select: { specialRole: true } });
+      const dbUser = await db.user.findUnique({ where: { id: socket.data.userId }, select: { specialRole: true, avatarStyle: true, avatarSeed: true, seatColor: true } });
       specialRole = dbUser?.specialRole ?? null;
+      avatarStyle = dbUser?.avatarStyle ?? 'thumbs';
+      avatarSeed = dbUser?.avatarSeed ?? socket.data.userId;
+      seatColor = dbUser?.seatColor ?? 'default';
     } catch {}
-    const room = rm.createRoom(data.name.trim() || 'Movie Night', media.id, media.title, media.poster, media.duration, data.maxParticipants || 24, socket.data.userId, socket.id, socket.data.nickname, specialRole);
+    const room = rm.createRoom(data.name.trim() || 'Movie Night', media.id, media.title, media.poster, media.duration, data.maxParticipants || 24, socket.data.userId, socket.id, socket.data.nickname, specialRole, avatarStyle, avatarSeed, seatColor, data.password || null, data.friendsOnly ?? false);
     socket.data.roomId = room.id;
     socket.join(room.id);
     cb({ room, media, userId: socket.data.userId });
   });
 
-  socket.on('room:join', async (data: { roomId: string }, cb) => {
+  socket.on('room:join', async (data: { roomId: string; password?: string }, cb) => {
     // Cancel any pending leader-disconnect grace timer for this user
     const graceKey = `${socket.data.userId}:${data.roomId}`;
     if (leaderGraceTimers.has(graceKey)) {
@@ -652,13 +695,34 @@ io.on('connection', socket => {
       console.log(`[leader-grace] ${socket.data.nickname} reconnected — grace cancelled`);
     }
 
-    // Look up specialRole for authenticated users
+    // Check password and friends-only before joining (skip for reconnects)
+    const roomCheck = rm.getRoomById(data.roomId);
+    if (roomCheck) {
+      const isReconnect = !!roomCheck.participants.find(p => p.id === socket.data.userId);
+      if (!isReconnect) {
+        if (roomCheck.password && data.password !== roomCheck.password) {
+          cb({ error: 'Wrong password' }); return;
+        }
+        if (roomCheck.friendsOnly) {
+          const isFriend = await auth.areFriends(socket.data.userId, roomCheck.leaderId);
+          if (!isFriend) { cb({ error: 'This hall is for friends only' }); return; }
+        }
+      }
+    }
+
+    // Look up user info for authenticated users
     let specialRole: string | null = null;
+    let avatarStyle = 'thumbs';
+    let avatarSeed = socket.data.userId;
+    let seatColor = 'default';
     try {
-      const dbUser = await db.user.findUnique({ where: { id: socket.data.userId }, select: { specialRole: true } });
+      const dbUser = await db.user.findUnique({ where: { id: socket.data.userId }, select: { specialRole: true, avatarStyle: true, avatarSeed: true, seatColor: true } });
       specialRole = dbUser?.specialRole ?? null;
+      avatarStyle = dbUser?.avatarStyle ?? 'thumbs';
+      avatarSeed = dbUser?.avatarSeed ?? socket.data.userId;
+      seatColor = dbUser?.seatColor ?? 'default';
     } catch {}
-    const result = rm.joinRoom(data.roomId, socket.data.userId, socket.id, socket.data.nickname, specialRole);
+    const result = rm.joinRoom(data.roomId, socket.data.userId, socket.id, socket.data.nickname, specialRole, avatarStyle, avatarSeed, seatColor);
     if ('error' in result) { cb({ error: result.error }); return; }
     const media = mediaLibrary.find(m => m.id === result.room.mediaId);
     socket.data.roomId = result.room.id;

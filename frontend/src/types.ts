@@ -5,6 +5,7 @@ export interface User {
   isLeader: boolean;
   seatNumber: number;
   specialRole?: string | null;
+  seatColor?: string;
 }
 
 export interface Message {
@@ -51,6 +52,8 @@ export interface RoomState {
   queuedMediaId: string | null;
   queuedMediaTitle: string | null;
   queuedMediaPoster: string | null;
+  password: string | null;
+  friendsOnly: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -79,13 +82,32 @@ export interface RoomPreview {
   participantCount: number;
   maxParticipants: number;
   isLocked: boolean;
+  hasPassword: boolean;
+  friendsOnly: boolean;
   leaderId: string;
+}
+
+export interface ActiveSession {
+  id: string;
+  name: string;
+  mediaTitle: string;
+  mediaPoster: string;
+  participantCount: number;
+  maxParticipants: number;
+  isPlaying: boolean;
+  isLocked: boolean;
+  hasPassword: boolean;
+  leaderId: string;
+  inviteCode: string;
+  createdAt: number;
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 export interface UserSettings {
   nickname: string;
   avatarSeed: string;
+  avatarStyle: string;
+  seatColor: string;
   defaultQuality: string;
   defaultAudioLang: string;
   defaultSubsLang: string;

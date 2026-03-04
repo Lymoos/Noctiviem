@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Search, Plus, Download, Upload, Settings, LogOut, Film, Shield } from 'lucide-react'
+import { Search, Plus, Download, Upload, Settings, LogOut, Film, Shield, UserSearch } from 'lucide-react'
 import { useStore } from '../store'
 import { translations } from '../i18n'
 import ImportModal from './ImportModal'
 import DownloadsPanel from './DownloadsPanel'
+import UserSearchModal from './UserSearchModal'
 
 interface NavbarProps {
   onCreateRoom?: () => void
@@ -18,6 +19,7 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
   const t = translations[lang]
   const [profileOpen, setProfileOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [friendSearchOpen, setFriendSearchOpen] = useState(false)
 
   const activeDownloads = downloads.filter(
     d => d.status === 'downloading' || d.status === 'metadata' || d.status === 'queued'
@@ -62,6 +64,18 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
         >
           {t.langToggleLabel}
         </button>
+
+        {/* Friend search */}
+        {account && (
+          <button
+            onClick={() => setFriendSearchOpen(true)}
+            className="btn-ghost text-sm flex items-center gap-2"
+            title={t.findFriends}
+          >
+            <UserSearch size={14} />
+            <span className="hidden sm:inline">{t.findFriends}</span>
+          </button>
+        )}
 
         {/* Import */}
         <button
@@ -149,6 +163,7 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
 
       {importOpen && <ImportModal onClose={() => setImportOpen(false)} />}
       {downloadsOpen && <DownloadsPanel />}
+      {friendSearchOpen && <UserSearchModal onClose={() => setFriendSearchOpen(false)} />}
     </>
   )
 }
