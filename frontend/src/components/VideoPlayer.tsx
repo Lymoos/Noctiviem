@@ -13,6 +13,7 @@ interface VideoPlayerProps {
   serverTime: number
   isPlaying: boolean
   onTimeUpdate?: (time: number) => void
+  onEnded?: () => void
 }
 
 function formatTime(s: number): string {
@@ -23,7 +24,7 @@ function formatTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`
 }
 
-export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate }: VideoPlayerProps) {
+export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate, onEnded }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -217,6 +218,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           // Without this, Chrome plays all tracks at once when multiple exist.
           applyAudioTrack(selectedAudio)
         }}
+        onEnded={() => onEnded?.()}
         onClick={handlePlayPause}
       />
 

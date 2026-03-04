@@ -746,6 +746,34 @@ body::before {
   box-shadow: 0 0 14px rgba(124,58,237,0.45), inset 0 0 8px rgba(124,58,237,0.1);
 }
 
+/* ─── Милое солнышко — sparkle cluster above avatar ────────────────────────── */
+.sparkle-cluster {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.sparkle-item {
+  font-size: 9px;
+  line-height: 1;
+  animation: sparkle-float 2.4s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.sparkle-1 { animation-delay: 0s; }
+.sparkle-2 { animation-delay: 0.6s; font-size: 7px; }
+.sparkle-3 { animation-delay: 1.2s; }
+
+@keyframes sparkle-float {
+  0%,  100% { transform: translateY(0)    scale(1);   opacity: 0.65; }
+  50%        { transform: translateY(-5px) scale(1.15); opacity: 1;   }
+}
+
 /* ─── Mobile responsive ─────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
 

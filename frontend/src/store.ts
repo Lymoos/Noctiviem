@@ -83,7 +83,8 @@ interface AppStore {
   setRoom: (room: RoomState, media?: MediaItem | null) => void;
   setCurrentUser: (user: User) => void;
   updateRoomSync: (data: Partial<Pick<RoomState, 'currentTime' | 'isPlaying'>>) => void;
-  updateRoomSettings: (data: Partial<Pick<RoomState, 'chatEnabled' | 'reactionsEnabled' | 'isLocked' | 'selectedAudio' | 'selectedSubs' | 'selectedQuality'>>) => void;
+  updateRoomSettings: (data: Partial<Pick<RoomState, 'chatEnabled' | 'reactionsEnabled' | 'isLocked' | 'selectedAudio' | 'selectedSubs' | 'selectedQuality' | 'queuedMediaId' | 'queuedMediaTitle' | 'queuedMediaPoster'>>) => void;
+  changeRoomMedia: (room: RoomState, media: MediaItem) => void;
   updateParticipants: (participants: User[], newLeaderId?: string) => void;
   addParticipant: (participant: User, participants: User[]) => void;
   addMessage: (msg: Message) => void;
@@ -154,6 +155,7 @@ export const useStore = create<AppStore>((set) => ({
 
   updateRoomSync: (data) => set(s => ({ room: s.room ? { ...s.room, ...data } : null })),
   updateRoomSettings: (data) => set(s => ({ room: s.room ? { ...s.room, ...data } : null })),
+  changeRoomMedia: (room, media) => set({ room, media }),
 
   updateParticipants: (participants, newLeaderId) => set(s => {
     if (!s.room) return {};

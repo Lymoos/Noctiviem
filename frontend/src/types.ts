@@ -4,6 +4,7 @@ export interface User {
   avatar: string;
   isLeader: boolean;
   seatNumber: number;
+  specialRole?: string | null;
 }
 
 export interface Message {
@@ -47,6 +48,9 @@ export interface RoomState {
   messages: Message[];
   reactions: Reaction[];
   leaderId: string;
+  queuedMediaId: string | null;
+  queuedMediaTitle: string | null;
+  queuedMediaPoster: string | null;
   createdAt: number;
   updatedAt: number;
 }

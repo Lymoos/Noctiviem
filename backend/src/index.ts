@@ -553,6 +553,27 @@ app.delete('/api/admin/files', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// ── Admin: user management ────────────────────────────────────────────────────
+app.get('/api/admin/users', requireAuth, requireAdmin, async (_req, res) => {
+  const users = await db.user.findMany({
+    select: { id: true, username: true, nickname: true, specialRole: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  res.json({ users });
+});
+
+app.post('/api/admin/users/:id/role', requireAuth, requireAdmin, async (req, res) => {
+  const { role } = req.body as { role: string | null };
+  const allowed = new Set([null, 'miloe-solnyshko']);
+  if (!allowed.has(role)) { res.status(400).json({ error: 'Invalid role' }); return; }
+  try {
+    await db.user.update({ where: { id: req.params.id }, data: { specialRole: role ?? null } });
+    res.json({ success: true });
+  } catch {
+    res.status(404).json({ error: 'User not found' });
+  }
+});
+
 // ── User profile ──────────────────────────────────────────────────────────────
 app.get('/api/users/:id/profile', requireAuth, async (req, res) => {
   const requesterId = (req as any).userId as string;
@@ -606,17 +627,23 @@ io.on('connection', socket => {
 
   console.log(`[+] ${nickname} (${socket.id})`);
 
-  socket.on('room:create', (data: { name: string; mediaId: string; maxParticipants?: number }, cb) => {
+  socket.on('room:create', async (data: { name: string; mediaId: string; maxParticipants?: number }, cb) => {
     const media = mediaLibrary.find(m => m.id === data.mediaId);
     if (!media) { cb({ error: 'Media not found' }); return; }
     if (media.status !== 'ready') { cb({ error: 'Media is not ready' }); return; }
-    const room = rm.createRoom(data.name.trim() || 'Movie Night', media.id, media.title, media.poster, media.duration, data.maxParticipants || 24, socket.data.userId, socket.id, socket.data.nickname);
+    // Look up specialRole for authenticated users
+    let specialRole: string | null = null;
+    try {
+      const dbUser = await db.user.findUnique({ where: { id: socket.data.userId }, select: { specialRole: true } });
+      specialRole = dbUser?.specialRole ?? null;
+    } catch {}
+    const room = rm.createRoom(data.name.trim() || 'Movie Night', media.id, media.title, media.poster, media.duration, data.maxParticipants || 24, socket.data.userId, socket.id, socket.data.nickname, specialRole);
     socket.data.roomId = room.id;
     socket.join(room.id);
     cb({ room, media, userId: socket.data.userId });
   });
 
-  socket.on('room:join', (data: { roomId: string }, cb) => {
+  socket.on('room:join', async (data: { roomId: string }, cb) => {
     // Cancel any pending leader-disconnect grace timer for this user
     const graceKey = `${socket.data.userId}:${data.roomId}`;
     if (leaderGraceTimers.has(graceKey)) {
@@ -625,7 +652,13 @@ io.on('connection', socket => {
       console.log(`[leader-grace] ${socket.data.nickname} reconnected — grace cancelled`);
     }
 
-    const result = rm.joinRoom(data.roomId, socket.data.userId, socket.id, socket.data.nickname);
+    // Look up specialRole for authenticated users
+    let specialRole: string | null = null;
+    try {
+      const dbUser = await db.user.findUnique({ where: { id: socket.data.userId }, select: { specialRole: true } });
+      specialRole = dbUser?.specialRole ?? null;
+    } catch {}
+    const result = rm.joinRoom(data.roomId, socket.data.userId, socket.id, socket.data.nickname, specialRole);
     if ('error' in result) { cb({ error: result.error }); return; }
     const media = mediaLibrary.find(m => m.id === result.room.mediaId);
     socket.data.roomId = result.room.id;
@@ -698,6 +731,41 @@ io.on('connection', socket => {
     const updated = rm.transferLeader(rid, socket.data.userId, d.targetUserId);
     if (!updated) return;
     io.to(rid).emit('room:participant_leave', { userId: '', participants: updated.participants, newLeaderId: updated.leaderId });
+  });
+
+  // ── Film queue ───────────────────────────────────────────────────────────────
+  socket.on('room:queue_media', (d: { mediaId: string | null }, cb?: (r: unknown) => void) => {
+    const rid = socket.data.roomId;
+    if (!rid || !isLeader()) { cb?.({ error: 'Not leader' }); return; }
+    let mediaId: string | null = null;
+    let mediaTitle: string | null = null;
+    let mediaPoster: string | null = null;
+    if (d.mediaId) {
+      const m = mediaLibrary.find(item => item.id === d.mediaId);
+      if (!m || m.status !== 'ready') { cb?.({ error: 'Media not ready' }); return; }
+      mediaId = m.id; mediaTitle = m.title; mediaPoster = m.poster;
+    }
+    const updated = rm.queueMedia(rid, mediaId, mediaTitle, mediaPoster);
+    if (!updated) { cb?.({ error: 'Room not found' }); return; }
+    io.to(rid).emit('room:settings_update', {
+      queuedMediaId: updated.queuedMediaId,
+      queuedMediaTitle: updated.queuedMediaTitle,
+      queuedMediaPoster: updated.queuedMediaPoster,
+    });
+    cb?.({ success: true });
+  });
+
+  socket.on('room:play_next', (cb?: (r: unknown) => void) => {
+    const rid = socket.data.roomId;
+    if (!rid || !isLeader()) { cb?.({ error: 'Not leader' }); return; }
+    const room = rm.getRoomById(rid);
+    if (!room?.queuedMediaId) { cb?.({ error: 'No media queued' }); return; }
+    const media = mediaLibrary.find(m => m.id === room.queuedMediaId);
+    if (!media || media.status !== 'ready') { cb?.({ error: 'Queued media not ready' }); return; }
+    const updated = rm.switchToQueuedMedia(rid, media.id, media.title, media.poster, media.duration);
+    if (!updated) return;
+    io.to(rid).emit('room:media_changed', { room: updated, media });
+    cb?.({ success: true });
   });
 
   socket.on('disconnect', () => {

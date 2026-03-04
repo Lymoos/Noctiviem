@@ -257,9 +257,20 @@ function SeatItem({
       {/* Avatar above seat */}
       {participant && (
         <div
-          className={`relative mb-1 cursor-pointer ${isCurrentUser ? 'ring-2 ring-purple-500 rounded-full' : ''}`}
+          className={`relative mb-1 cursor-pointer ${
+            participant.specialRole === 'miloe-solnyshko'
+              ? 'ring-2 ring-rose-400/60 rounded-full'
+              : isCurrentUser ? 'ring-2 ring-purple-500 rounded-full' : ''
+          }`}
           onClick={() => onProfile(participant)}
         >
+          {participant.specialRole === 'miloe-solnyshko' && (
+            <div className="sparkle-cluster" aria-hidden="true">
+              <span className="sparkle-item sparkle-1">🌸</span>
+              <span className="sparkle-item sparkle-2">✨</span>
+              <span className="sparkle-item sparkle-3">🌸</span>
+            </div>
+          )}
           <img
             src={participant.avatar}
             alt={participant.nickname}

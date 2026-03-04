@@ -11,6 +11,7 @@ import LeaderPanel from '../components/LeaderPanel'
 import { useStore, selectIsLeader } from '../store'
 import { socket, connectSocket, getLocalUserId } from '../socket'
 import { RoomState, MediaItem, Message, Reaction, User, FloatingReaction } from '../types'
+import { SkipForward } from 'lucide-react'
 
 const BUBBLE_DURATION = 4000
 
@@ -21,7 +22,7 @@ export default function Room() {
   const {
     room, media, currentUser, setRoom, setCurrentUser, clearRoom,
     updateRoomSync, updateRoomSettings, updateParticipants, addParticipant,
-    addMessage, deleteMessage, addReaction,
+    addMessage, deleteMessage, addReaction, changeRoomMedia,
     chatOpen, toggleChat, leaderPanelOpen, toggleLeaderPanel,
   } = useStore()
 
@@ -146,6 +147,10 @@ export default function Room() {
       }, 2500)
     })
 
+    socket.on('room:media_changed', (data: { room: RoomState; media: MediaItem }) => {
+      changeRoomMedia(data.room, data.media)
+    })
+
     socket.on('room:kicked', () => {
       setKicked(true)
       clearRoom()
@@ -172,11 +177,12 @@ export default function Room() {
       socket.off('room:message')
       socket.off('room:message_deleted')
       socket.off('room:reaction')
+      socket.off('room:media_changed')
       socket.off('room:kicked')
       socket.off('disconnect')
       socket.off('connect')
     }
-  }, [userId, addMessage, addParticipant, addReaction, clearRoom, deleteMessage, navigate, updateParticipants, updateRoomSettings, updateRoomSync])
+  }, [userId, addMessage, addParticipant, addReaction, changeRoomMedia, clearRoom, deleteMessage, navigate, updateParticipants, updateRoomSettings, updateRoomSync])
 
   // Leave room on unmount — only called on explicit navigation, NOT on F5
   // F5 triggers a socket disconnect; the server has a grace period before
@@ -362,8 +368,40 @@ export default function Room() {
                 serverTime={room.currentTime}
                 isPlaying={room.isPlaying}
                 onTimeUpdate={setCurrentVideoTime}
+                onEnded={() => {
+                  // When video ends and there's a queued film, leader sees Play Next button
+                  // (the banner below handles this — nothing needed here)
+                }}
               />
             </div>
+
+            {/* Up Next banner — visible to everyone when a film is queued */}
+            {room.queuedMediaId && (
+              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 glass-strong rounded-xl px-4 py-2.5 border border-blue-500/20 animate-fade-in">
+                {room.queuedMediaPoster && (
+                  <img
+                    src={room.queuedMediaPoster}
+                    alt={room.queuedMediaTitle ?? ''}
+                    className="w-8 h-11 object-cover rounded flex-shrink-0"
+                    onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-[10px] text-slate-500 leading-none mb-0.5">Up next</p>
+                  <p className="text-xs font-medium text-cinema-text truncate max-w-[140px]">{room.queuedMediaTitle}</p>
+                </div>
+                {isLeader && (
+                  <button
+                    onClick={() => socket.emit('room:play_next')}
+                    className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 transition-colors flex-shrink-0 ml-1"
+                    title="Switch to queued film now"
+                  >
+                    <SkipForward size={14} />
+                    <span className="hidden sm:inline">Play now</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Stage edge — glowing divider between screen and seats */}

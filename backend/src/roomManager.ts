@@ -20,6 +20,7 @@ export function createRoom(
   leaderId: string,
   leaderSocketId: string,
   leaderNickname: string,
+  leaderSpecialRole?: string | null,
 ): RoomState {
   const id = uuidv4();
   const inviteCode = generateInviteCode();
@@ -31,6 +32,7 @@ export function createRoom(
     isLeader: true,
     seatNumber: 1,
     socketId: leaderSocketId,
+    specialRole: leaderSpecialRole ?? null,
   };
 
   const room: RoomState = {
@@ -55,6 +57,9 @@ export function createRoom(
     reactions: [],
     leaderId,
     leaderSocketId,
+    queuedMediaId: null,
+    queuedMediaTitle: null,
+    queuedMediaPoster: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -79,6 +84,7 @@ export function joinRoom(
   userId: string,
   socketId: string,
   nickname: string,
+  specialRole?: string | null,
 ): { room: RoomState; user: User } | { error: string } {
   const room = rooms.get(roomId);
   if (!room) return { error: 'Room not found' };
@@ -91,8 +97,9 @@ export function joinRoom(
 
   const existing = room.participants.find(p => p.id === userId);
   if (existing) {
-    // Reconnecting user — just update their socketId, bypass lock/full checks
+    // Reconnecting user — update socketId and refresh specialRole
     existing.socketId = socketId;
+    if (specialRole !== undefined) existing.specialRole = specialRole;
     return { room, user: existing };
   }
 
@@ -110,11 +117,51 @@ export function joinRoom(
     isLeader: false,
     seatNumber,
     socketId,
+    specialRole: specialRole ?? null,
   };
 
   room.participants.push(user);
   room.updatedAt = Date.now();
   return { room, user };
+}
+
+export function queueMedia(
+  roomId: string,
+  mediaId: string | null,
+  mediaTitle: string | null,
+  mediaPoster: string | null,
+): RoomState | undefined {
+  const room = rooms.get(roomId);
+  if (!room) return undefined;
+  room.queuedMediaId = mediaId;
+  room.queuedMediaTitle = mediaTitle;
+  room.queuedMediaPoster = mediaPoster;
+  room.updatedAt = Date.now();
+  return room;
+}
+
+export function switchToQueuedMedia(
+  roomId: string,
+  mediaId: string,
+  mediaTitle: string,
+  mediaPoster: string,
+  mediaDuration: number,
+): RoomState | undefined {
+  const room = rooms.get(roomId);
+  if (!room) return undefined;
+  room.mediaId = mediaId;
+  room.mediaTitle = mediaTitle;
+  room.mediaPoster = mediaPoster;
+  room.mediaDuration = mediaDuration;
+  room.currentTime = 0;
+  room.isPlaying = false;
+  room.selectedAudio = 0;
+  room.selectedSubs = 'off';
+  room.queuedMediaId = null;
+  room.queuedMediaTitle = null;
+  room.queuedMediaPoster = null;
+  room.updatedAt = Date.now();
+  return room;
 }
 
 export function leaveRoom(roomId: string, userId: string): RoomState | undefined {

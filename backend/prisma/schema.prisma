@@ -20,6 +20,7 @@ model User {
   maxConcurrentDownloads Int            @default(2)
   autoSyncOnJoin         Boolean        @default(true)
   isPrivate              Boolean        @default(false)
+  specialRole            String?
   createdAt              DateTime       @default(now())
 
   watchHistory           WatchHistory[]
