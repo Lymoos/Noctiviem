@@ -106,7 +106,9 @@ export const useStore = create<AppStore>((set) => ({
   setAccount: (account, token) => {
     setToken(token);
     localStorage.setItem(NICK_KEY, account.settings.nickname);
-    set({ account, isAuthenticated: true, nickname: account.settings.nickname });
+    // Sync socket userId to the authenticated user's DB ID so profile lookups work
+    localStorage.setItem(USERID_KEY, account.id);
+    set({ account, isAuthenticated: true, nickname: account.settings.nickname, userId: account.id });
   },
 
   updateAccount: (account) => {

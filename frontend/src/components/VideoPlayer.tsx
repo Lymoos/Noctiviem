@@ -184,8 +184,8 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   return (
     <div
       ref={containerRef}
-      className="relative bg-black overflow-hidden vignette group"
-      style={{ maxHeight: 'calc(100vh - 360px)', borderRadius: '2px' }}
+      className="relative bg-black overflow-hidden vignette group w-full"
+      style={{ borderRadius: fullscreen ? 0 : '2px' }}
       onMouseMove={showControls}
       onMouseLeave={() => isPlaying && setControlsVisible(false)}
     >
@@ -193,8 +193,14 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
       <video
         ref={videoRef}
         src={media.videoUrl}
-        className="w-full aspect-video"
-        style={{ maxHeight: 'calc(100vh - 360px)', objectFit: 'contain', cursor: isLeader ? 'pointer' : 'default' }}
+        className="w-full"
+        style={{
+          display: 'block',
+          objectFit: 'contain',
+          cursor: isLeader ? 'pointer' : 'default',
+          height: fullscreen ? '100vh' : 'auto',
+          maxHeight: fullscreen ? '100vh' : 'calc(100vh - 200px)',
+        }}
         playsInline
         preload="metadata"
         onTimeUpdate={() => {

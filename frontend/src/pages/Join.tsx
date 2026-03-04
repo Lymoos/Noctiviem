@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Users, Lock, Film, ArrowRight } from 'lucide-react'
-import { socket, connectSocket, getLocalUserId } from '../socket'
+import { Users, Lock, Film, ArrowRight, Edit2 } from 'lucide-react'
+import { socket, connectSocket } from '../socket'
 import { useStore } from '../store'
 import { RoomState, MediaItem, User } from '../types'
 
@@ -18,12 +18,15 @@ interface RoomPreview {
 export default function Join() {
   const { inviteCode } = useParams<{ inviteCode: string }>()
   const navigate = useNavigate()
-  const { setRoom, setCurrentUser, nickname } = useStore()
+  const { setRoom, setCurrentUser, nickname: storedNickname, isAuthenticated } = useStore()
 
   const [preview, setPreview] = useState<RoomPreview | null>(null)
   const [loading, setLoading] = useState(true)
   const [joining, setJoining] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [guestNickname, setGuestNickname] = useState('')
+
+  useEffect(() => { setGuestNickname(storedNickname) }, [storedNickname])
 
   useEffect(() => {
     if (!inviteCode) { navigate('/'); return }
@@ -32,18 +35,17 @@ export default function Join() {
         if (!r.ok) throw new Error('Room not found')
         return r.json()
       })
-      .then(data => {
-        setPreview(data)
-        setLoading(false)
-      })
-      .catch(() => {
-        setError('This invite link is invalid or the hall has ended.')
-        setLoading(false)
-      })
+      .then(data => { setPreview(data); setLoading(false) })
+      .catch(() => { setError('This invite link is invalid or the hall has ended.'); setLoading(false) })
   }, [inviteCode, navigate])
 
+  const effectiveNickname = isAuthenticated ? storedNickname : (guestNickname.trim() || storedNickname)
+
   const handleJoin = () => {
-    if (!preview) return
+    if (!preview || !effectiveNickname.trim()) return
+    if (!isAuthenticated && guestNickname.trim()) {
+      localStorage.setItem('noctiviem_nickname', guestNickname.trim())
+    }
     setJoining(true)
     connectSocket()
 
@@ -51,11 +53,7 @@ export default function Join() {
       socket.emit('room:join', { roomId: preview.id }, (res: {
         room: RoomState; user: User; media: MediaItem; userId: string; error?: string
       }) => {
-        if (res.error) {
-          setError(res.error)
-          setJoining(false)
-          return
-        }
+        if (res.error) { setError(res.error); setJoining(false); return }
         setRoom(res.room, res.media)
         setCurrentUser(res.user)
         navigate(`/room/${res.room.id}`)
@@ -125,53 +123,67 @@ export default function Join() {
 
           {/* Body */}
           <div className="p-6">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-2 text-sm text-slate-400">
                 <Users size={14} />
                 <span>{preview.participantCount}/{preview.maxParticipants} viewers</span>
               </div>
               {preview.isLocked && (
                 <div className="flex items-center gap-1.5 text-sm text-red-400">
-                  <Lock size={14} />
-                  <span>Hall is locked</span>
+                  <Lock size={14} /><span>Hall is locked</span>
                 </div>
               )}
             </div>
 
-            <div className="text-xs text-slate-500 mb-2">Joining as</div>
-            <div className="flex items-center gap-2 glass rounded-lg px-3 py-2 mb-5">
-              <div className="w-6 h-6 rounded-full accent-gradient flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                {nickname.slice(0, 2).toUpperCase()}
-              </div>
-              <span className="text-sm text-cinema-text">{nickname}</span>
-            </div>
+            {isAuthenticated ? (
+              <>
+                <div className="text-xs text-slate-500 mb-2">Joining as</div>
+                <div className="flex items-center gap-2 glass rounded-lg px-3 py-2 mb-5">
+                  <div className="w-6 h-6 rounded-full accent-gradient flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                    {storedNickname.slice(0, 2).toUpperCase()}
+                  </div>
+                  <span className="text-sm text-cinema-text">{storedNickname}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-slate-500 mb-2 flex items-center gap-1">
+                  <Edit2 size={11} /> Enter your nickname
+                </div>
+                <input
+                  type="text"
+                  value={guestNickname}
+                  onChange={e => setGuestNickname(e.target.value.slice(0, 24))}
+                  onKeyDown={e => e.key === 'Enter' && !preview.isLocked && handleJoin()}
+                  placeholder="Your nickname…"
+                  className="input-field w-full mb-1"
+                  autoFocus maxLength={24}
+                />
+                <p className="text-xs text-slate-600 mb-5">No account needed — joining as guest</p>
+              </>
+            )}
 
             <button
               onClick={handleJoin}
-              disabled={joining || preview.isLocked}
+              disabled={joining || preview.isLocked || !effectiveNickname.trim()}
               className="btn-primary w-full flex items-center justify-center gap-2"
             >
-              {joining ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Entering hall…
-                </>
-              ) : preview.isLocked ? (
-                <>
-                  <Lock size={14} />
-                  Hall is locked
-                </>
-              ) : (
-                <>
-                  <ArrowRight size={14} />
-                  Enter Cinema Hall
-                </>
-              )}
+              {joining
+                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Entering hall…</>
+                : preview.isLocked
+                  ? <><Lock size={14} /> Hall is locked</>
+                  : <><ArrowRight size={14} /> Enter Cinema Hall</>
+              }
             </button>
 
-            <button onClick={() => navigate('/')} className="btn-secondary w-full mt-3 text-sm">
-              Back to Dashboard
-            </button>
+            {!isAuthenticated && (
+              <p className="text-center text-xs text-slate-600 mt-4">
+                Have an account?{' '}
+                <button onClick={() => navigate('/login')} className="text-purple-400 hover:text-purple-300 transition-colors">
+                  Sign in
+                </button>
+              </p>
+            )}
           </div>
         </div>
       </div>

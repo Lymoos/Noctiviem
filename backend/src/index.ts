@@ -190,52 +190,63 @@ dl.setOnCompleted(async (item) => {
     const title = f.name.replace(/\.[^.]+$/, '');
     if (mediaLibrary.find(m => m.title === title)) continue;
 
-    // f.path from WebTorrent is relative to DOWNLOADS_DIR, but for single-file
-    // torrents it may be "TorrentName/file.mkv" while the file is actually flat.
     let filePath = path.join(dl.DOWNLOADS_DIR, f.path);
     if (!fs.existsSync(filePath)) {
       const flat = path.join(dl.DOWNLOADS_DIR, f.name);
       if (fs.existsSync(flat)) filePath = flat;
     }
 
-    // Browsers can't play MKV/AVI/etc — remux to MP4 (stream copy, fast, lossless)
+    // Add a "converting" placeholder so the card appears immediately in the library
+    const tempId = uuidv4();
+    const tempItem: MediaItem = {
+      id: tempId, title,
+      poster: `https://picsum.photos/seed/${item.id}/400/600`,
+      thumbnail: `https://picsum.photos/seed/${item.id}/800/450`,
+      duration: 0, year: new Date().getFullYear(),
+      genre: 'Downloaded', description: 'Converting…',
+      audio: [{ id: 0, label: 'Track 1', lang: 'und' }],
+      subtitles: [{ id: 'off', label: 'Off', lang: 'off' }],
+      qualities: ['Auto'], status: 'processing', videoUrl: '',
+    };
+    mediaLibrary.push(tempItem);
+    io.emit('media:updated', mediaLibrary);
+
+    // Remux to MP4 (stream copy + AAC audio)
     try {
       filePath = await remuxToMp4(filePath);
     } catch (e: any) {
       console.error('[remux] failed, using original file:', e.message);
     }
 
-    const { duration, audio, subtitles } = await probeVideoFile(filePath);
+    // Fix audio codec (AC3/DTS/TrueHD → AAC) for files already in MP4 container
+    if (path.extname(filePath).toLowerCase() === '.mp4') {
+      try {
+        if (await needsAudioFix(filePath)) await fixAudioInPlace(filePath);
+      } catch (e: any) {
+        console.error('[audio-fix] new download:', e.message);
+      }
+    }
 
-    // Build a URL-safe path by encoding each path segment individually
+    const { duration, audio, subtitles } = await probeVideoFile(filePath);
     const relPath = path.relative(dl.DOWNLOADS_DIR, filePath);
     const videoUrl = '/media/' + relPath.split('/').map(encodeURIComponent).join('/');
 
-    const mediaItem: MediaItem = {
-      id: uuidv4(),
-      title,
-      poster: `https://picsum.photos/seed/${item.id}/400/600`,
-      thumbnail: `https://picsum.photos/seed/${item.id}/800/450`,
-      duration,
-      year: new Date().getFullYear(),
-      genre: 'Downloaded',
-      description: `Downloaded via torrent: ${item.name}`,
-      audio,
-      subtitles,
-      qualities: ['Auto'],
-      status: 'ready',
-      videoUrl,
-    };
-    mediaLibrary.push(mediaItem);
-    item.mediaIds.push(mediaItem.id);
+    // Update placeholder in-place so the same array slot becomes ready
+    tempItem.duration = Math.round(duration);  // Int — DB requires whole seconds
+    tempItem.videoUrl = videoUrl;
+    tempItem.audio = audio;
+    tempItem.subtitles = subtitles;
+    tempItem.status = 'ready';
+    item.mediaIds.push(tempId);
+
     await db.mediaItem.create({
       data: {
-        id: mediaItem.id, title: mediaItem.title, poster: mediaItem.poster,
-        thumbnail: mediaItem.thumbnail, duration: mediaItem.duration, year: mediaItem.year,
-        genre: mediaItem.genre, description: mediaItem.description,
-        audio: mediaItem.audio as any, subtitles: mediaItem.subtitles as any,
-        qualities: mediaItem.qualities as any, status: mediaItem.status,
-        videoUrl: mediaItem.videoUrl,
+        id: tempId, title, poster: tempItem.poster,
+        thumbnail: tempItem.thumbnail, duration: tempItem.duration, year: tempItem.year,
+        genre: tempItem.genre, description: tempItem.description,
+        audio: audio as any, subtitles: subtitles as any,
+        qualities: tempItem.qualities as any, status: 'ready',
+        videoUrl,
       },
     }).catch((e: Error) => console.error('[media] DB save failed:', e.message));
   }
@@ -579,7 +590,15 @@ dl.setBroadcast((items) => io.emit('downloads:update', items));
 const leaderGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 io.on('connection', socket => {
-  const userId = (socket.handshake.query.userId as string) || uuidv4();
+  // Authenticated users: use the JWT user ID so profile API works by socket userId
+  const token = (socket.handshake.query.token as string) || '';
+  let userId = (socket.handshake.query.userId as string) || '';
+  if (token) {
+    const jwtId = auth.verifyToken(token);
+    if (jwtId) userId = jwtId;
+  }
+  if (!userId) userId = uuidv4();
+
   const nickname = (socket.handshake.query.nickname as string) || `Guest_${userId.slice(0, 4)}`;
   socket.data.userId = userId;
   socket.data.nickname = nickname;
@@ -771,13 +790,13 @@ async function repairMediaLibrary() {
     const { duration, audio, subtitles } = await probeVideoFile(filePath);
 
     item.videoUrl = newUrl;
-    item.duration = duration;
+    item.duration = Math.round(duration);
     item.audio = audio;
     item.subtitles = subtitles;
 
     await db.mediaItem.update({
       where: { id: item.id },
-      data: { videoUrl: newUrl, duration, audio: audio as any, subtitles: subtitles as any },
+      data: { videoUrl: newUrl, duration: Math.round(duration), audio: audio as any, subtitles: subtitles as any },
     }).catch((e: Error) => console.error('[repair] DB update failed:', e.message));
 
     console.log(`[repair] fixed "${item.title}" → ${newUrl}`);

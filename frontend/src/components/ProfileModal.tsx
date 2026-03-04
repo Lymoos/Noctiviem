@@ -5,7 +5,8 @@ import { apiFetch, apiPost, apiDelete } from '../store'
 
 interface ProfileModalProps {
   userId: string
-  isLeader: boolean         // is the current (viewing) user the room leader?
+  nickname: string          // participant's nickname as fallback for guests
+  isLeader: boolean
   currentUserId: string
   onClose: () => void
   onTransferLeader: () => void
@@ -13,6 +14,7 @@ interface ProfileModalProps {
 
 export default function ProfileModal({
   userId,
+  nickname: participantNickname,
   isLeader,
   currentUserId,
   onClose,
@@ -20,6 +22,7 @@ export default function ProfileModal({
 }: ProfileModalProps) {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isGuest, setIsGuest] = useState(false)
   const [isFriend, setIsFriend] = useState(false)
   const [friendLoading, setFriendLoading] = useState(false)
 
@@ -27,10 +30,13 @@ export default function ProfileModal({
 
   useEffect(() => {
     setLoading(true)
+    setIsGuest(false)
     apiFetch<UserProfile>(`/api/users/${userId}/profile`)
       .then(p => {
-        if (!p.error) setProfile(p)
+        if (p.error) { setIsGuest(true); return }
+        setProfile(p)
       })
+      .catch(() => setIsGuest(true))
       .finally(() => setLoading(false))
   }, [userId])
 
@@ -76,7 +82,9 @@ export default function ProfileModal({
               {loading ? (
                 <div className="w-24 h-4 bg-white/10 rounded animate-pulse mb-1" />
               ) : (
-                <div className="font-semibold text-cinema-text">{profile?.nickname}</div>
+                <div className="font-semibold text-cinema-text">
+                  {profile?.nickname ?? participantNickname}
+                </div>
               )}
               {profile && (
                 <div className="text-xs text-cinema-muted">@{profile.username}</div>
@@ -97,6 +105,25 @@ export default function ProfileModal({
           <div className="flex justify-center py-6">
             <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
           </div>
+        )}
+
+        {/* Guest badge — no DB account */}
+        {!loading && isGuest && (
+          <div className="flex items-center gap-2 text-xs text-slate-500 glass rounded-lg px-3 py-2 mb-4">
+            <Users size={12} />
+            Guest — no account, no profile data
+          </div>
+        )}
+
+        {/* Transfer button available even for guests */}
+        {!loading && isGuest && !isSelf && isLeader && (
+          <button
+            onClick={() => { onTransferLeader(); onClose() }}
+            className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-lg glass text-yellow-400 hover:bg-yellow-500/10 transition-colors w-full justify-center"
+          >
+            <Crown size={13} />
+            Transfer Leadership
+          </button>
         )}
 
         {!loading && profile && (

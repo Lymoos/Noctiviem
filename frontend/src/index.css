@@ -745,3 +745,52 @@ body::before {
   border-color: rgba(124,58,237,0.65);
   box-shadow: 0 0 14px rgba(124,58,237,0.45), inset 0 0 8px rgba(124,58,237,0.1);
 }
+
+/* ─── Mobile responsive ─────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+
+  /* Dashboard — single column grid */
+  .grid.grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* Navbar: hide text labels on small screens, keep icons */
+  .navbar-label { display: none; }
+
+  /* Seat size on mobile */
+  .seat-base {
+    width: 32px;
+    height: 32px;
+    border-radius: 5px 5px 2px 2px;
+  }
+
+  /* Cinema hall — reduce padding */
+  .cinema-seat { width: 34px !important; }
+
+  /* Cinema screen — almost full width on mobile */
+  .cinema-screen-frame { width: 95% !important; }
+
+  /* Room layout: stage takes full width */
+  .cinema-room-stage { min-width: 0; }
+
+  /* Video player controls — hide less important items */
+  .player-quality-btn { display: none; }
+
+  /* Reaction buttons smaller */
+  .reaction-btn { width: 30px; height: 30px; font-size: 15px; }
+
+  /* Modal content — full width on mobile */
+  .modal-content {
+    margin: 16px;
+    max-width: calc(100vw - 32px) !important;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
+
+  /* Admin / settings pages */
+  .admin-grid { grid-template-columns: 1fr !important; }
+}
+
+/* Touch device — remove hover effects that feel wrong */
+@media (hover: none) {
+  .cinema-seat:hover { transform: none; }
+  .btn-ghost:hover { background: transparent; }
+}

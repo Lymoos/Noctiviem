@@ -387,9 +387,9 @@ export default function Room() {
           </div>
         </div>
 
-        {/* Right: Chat */}
+        {/* Right: Chat — full-screen overlay on mobile, side panel on desktop */}
         {chatOpen && (
-          <div className="w-72 flex-shrink-0 border-l border-white/5 flex flex-col min-h-0 animate-slide-in-right">
+          <div className="fixed inset-0 z-50 sm:relative sm:inset-auto sm:z-auto w-full sm:w-72 flex-shrink-0 sm:border-l border-white/5 flex flex-col min-h-0 animate-slide-in-right">
             <Chat
               messages={room.messages}
               currentUserId={userId}

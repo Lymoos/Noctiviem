@@ -103,27 +103,27 @@ export default function CinemaHall({
       })}
 
       {/* Seats — perspective effect: back rows narrower + dimmer, front rows wider + brighter */}
-      <div className="flex flex-col items-center" style={{ gap: 0 }}>
+      <div className="flex flex-col items-center overflow-x-hidden w-full" style={{ gap: 0 }}>
         {Array.from({ length: MAX_ROWS }, (_, rowIdx) => {
-          // Row 0 = back (narrow, dim), Row MAX_ROWS-1 = front (wide, bright)
-          const t = rowIdx / (MAX_ROWS - 1)                          // 0 → 1
-          const scaleX   = 0.78 + t * 0.22                           // 0.78 → 1.0
-          const opacity  = 0.55 + t * 0.45                           // 0.55 → 1.0
-          const marginTop = rowIdx === 0 ? 0 : 6 + rowIdx * 5        // increasing gap
+          const t = rowIdx / (MAX_ROWS - 1)           // 0 → 1
+          const perspScale = 0.80 + t * 0.20          // 0.80 → 1.0
+          const opacity    = 0.55 + t * 0.45          // 0.55 → 1.0
+          const marginTop  = rowIdx === 0 ? 0 : 4 + rowIdx * 4
 
           return (
             <div
               key={rowIdx}
-              className="flex items-end justify-center gap-2"
+              className="flex items-end justify-center"
               style={{
-                transform: `scaleX(${scaleX})`,
+                transform: `scaleX(${perspScale})`,
                 opacity,
                 transformOrigin: 'center center',
                 marginTop,
                 transition: 'transform 0.4s ease, opacity 0.4s ease',
+                gap: '6px',
               }}
             >
-              <span className="text-xs text-slate-700 w-4 flex-shrink-0 text-right select-none">
+              <span className="text-[10px] text-slate-700 w-3 flex-shrink-0 text-right select-none">
                 {rowIdx + 1}
               </span>
 
@@ -145,7 +145,7 @@ export default function CinemaHall({
                 />
               ))}
 
-              <span className="text-xs text-slate-700 w-4 flex-shrink-0 select-none">
+              <span className="text-[10px] text-slate-700 w-3 flex-shrink-0 select-none">
                 {rowIdx + 1}
               </span>
             </div>
@@ -174,6 +174,7 @@ export default function CinemaHall({
       {profileUserId && (
         <ProfileModal
           userId={profileUserId}
+          nickname={participants.find(p => p.id === profileUserId)?.nickname ?? ''}
           isLeader={isLeader}
           currentUserId={currentUserId}
           onClose={() => setProfileUserId(null)}
@@ -240,7 +241,7 @@ function SeatItem({
   const waveDelay = (seatNum - 1) * 50
 
   return (
-    <div className="cinema-seat" style={{ width: 52 }}>
+    <div className="cinema-seat" style={{ width: 44 }}>
       {/* Chat bubble */}
       {bubble && chatEnabled && (
         <div className="chat-bubble animate-bubble-in">
