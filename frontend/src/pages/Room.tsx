@@ -362,7 +362,7 @@ export default function Room() {
             <div className="cinema-curtain-r" />
 
             {/* Cinema screen frame */}
-            <div className="cinema-screen-frame" style={{ width: '72%', maxWidth: 'calc(42vh * (16 / 9))' }}>
+            <div className="cinema-screen-frame" style={{ width: '72%', maxWidth: 'calc(56vh * (16 / 9))' }}>
               <VideoPlayer
                 media={media}
                 serverTime={room.currentTime}

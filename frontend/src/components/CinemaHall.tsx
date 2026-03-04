@@ -107,9 +107,9 @@ export default function CinemaHall({
       <div className="flex flex-col items-center overflow-x-hidden w-full" style={{ gap: 0 }}>
         {Array.from({ length: MAX_ROWS }, (_, rowIdx) => {
           const t = rowIdx / (MAX_ROWS - 1)           // 0 → 1
-          const perspScale = 0.80 + t * 0.20          // 0.80 → 1.0
-          const opacity    = 0.55 + t * 0.45          // 0.55 → 1.0
-          const marginTop  = rowIdx === 0 ? 0 : 4 + rowIdx * 4
+          const perspScale = 0.91 + t * 0.09          // 0.91 → 1.0  (less squish)
+          const opacity    = 0.60 + t * 0.40          // 0.60 → 1.0
+          const marginTop  = rowIdx === 0 ? 0 : 6 + rowIdx * 5
 
           return (
             <div
@@ -121,7 +121,7 @@ export default function CinemaHall({
                 transformOrigin: 'center center',
                 marginTop,
                 transition: 'transform 0.4s ease, opacity 0.4s ease',
-                gap: '6px',
+                gap: '10px',
               }}
             >
               <span className="text-[10px] text-slate-700 w-3 flex-shrink-0 text-right select-none">
@@ -143,6 +143,7 @@ export default function CinemaHall({
                   onKick={handleKick}
                   onProfile={p => setProfileUserId(p.id)}
                   rowIndex={rowIdx}
+                  perspScale={perspScale}
                 />
               ))}
 
@@ -230,11 +231,12 @@ interface SeatItemProps {
   onKick: (userId: string) => void
   onProfile: (p: User) => void
   rowIndex: number
+  perspScale: number
 }
 
 function SeatItem({
   seatNum, participant, leaderId, currentUserId, isLeader,
-  chatEnabled, bubble, waveActive, onWhisper, onKick, onProfile, rowIndex,
+  chatEnabled, bubble, waveActive, onWhisper, onKick, onProfile, rowIndex, perspScale,
 }: SeatItemProps) {
   const isOccupied = !!participant
   const isThisLeader = participant?.id === leaderId
@@ -244,7 +246,7 @@ function SeatItem({
   const waveDelay = (seatNum - 1) * 50
 
   return (
-    <div className="cinema-seat" style={{ width: 44 }}>
+    <div className="cinema-seat" style={{ width: 62 }}>
       {/* Chat bubble */}
       {bubble && chatEnabled && (
         <div className="chat-bubble animate-bubble-in">
@@ -277,8 +279,11 @@ function SeatItem({
           <img
             src={participant.avatar}
             alt={participant.nickname}
-            className="w-8 h-8 rounded-full"
-            style={{ filter: isCurrentUser ? 'none' : 'brightness(0.9)' }}
+            className="w-11 h-11 rounded-full"
+            style={{
+              filter: isCurrentUser ? 'none' : 'brightness(0.9)',
+              transform: `scaleX(${1 / perspScale})`,
+            }}
             onError={e => {
               (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/thumbs/svg?seed=${participant.id}`
             }}
