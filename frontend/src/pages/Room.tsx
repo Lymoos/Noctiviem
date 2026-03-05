@@ -316,10 +316,12 @@ export default function Room() {
         {/* Invite */}
         <button
           onClick={copyInvite}
+          title={`${window.location.origin}/join/${room.inviteCode}`}
           className="invite-badge flex items-center gap-1.5 text-xs flex-shrink-0"
         >
           {copied ? <CheckCheck size={12} /> : <Share2 size={12} />}
-          <span className="hidden sm:inline">{copied ? 'Copied!' : room.inviteCode}</span>
+          <span>{copied ? 'Copied!' : 'Invite'}</span>
+          <span className="hidden sm:inline text-white/40">· {room.inviteCode}</span>
         </button>
 
         {/* Leader panel toggle */}

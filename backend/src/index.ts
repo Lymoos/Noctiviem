@@ -245,6 +245,70 @@ async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void
   return outputPath;
 }
 
+// ─── TMDB metadata ────────────────────────────────────────────────────────────
+const TMDB_GENRES: Record<number, string> = {
+  28: 'Экшн', 12: 'Приключения', 16: 'Анимация', 35: 'Комедия', 80: 'Криминал',
+  99: 'Документальный', 18: 'Драма', 10751: 'Семейный', 14: 'Фэнтези',
+  36: 'Исторический', 27: 'Ужасы', 9648: 'Детектив', 10749: 'Мелодрама',
+  878: 'Фантастика', 53: 'Триллер', 10752: 'Военный', 37: 'Вестерн',
+};
+
+/** Extract a clean title and optional year from a raw torrent filename. */
+function parseTitleAndYear(filename: string): { title: string; year?: number } {
+  const base = filename.replace(/\.[^.]+$/, ''); // strip extension
+  const yearMatch = base.match(/\b(19[5-9]\d|20[012]\d)\b/);
+  const year = yearMatch ? parseInt(yearMatch[0]) : undefined;
+  const titlePart = yearMatch ? base.slice(0, yearMatch.index) : base;
+  const title = titlePart.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return { title, year };
+}
+
+interface TmdbMeta {
+  title: string; year: number; poster: string; thumbnail: string;
+  genre: string; description: string;
+}
+
+/** Query TMDB for movie metadata. Returns null if TMDB_API_KEY not set or request fails. */
+async function fetchTmdbMetadata(rawFilename: string): Promise<TmdbMeta | null> {
+  const apiKey = process.env.TMDB_API_KEY;
+  if (!apiKey) return null;
+
+  const { title, year } = parseTitleAndYear(rawFilename);
+  if (!title) return null;
+
+  const trySearch = async (lang: string): Promise<TmdbMeta | null> => {
+    try {
+      const params = new URLSearchParams({ api_key: apiKey, query: title, language: lang });
+      if (year) params.set('year', String(year));
+      const res = await fetch(
+        `https://api.themoviedb.org/3/search/movie?${params}`,
+        { signal: AbortSignal.timeout(10_000) }
+      );
+      if (!res.ok) return null;
+      const data = await res.json() as { results?: any[] };
+      const m = data.results?.[0];
+      if (!m) return null;
+      const releaseYear = m.release_date ? parseInt(m.release_date.slice(0, 4)) : (year ?? new Date().getFullYear());
+      const genre = (m.genre_ids as number[] ?? []).slice(0, 2)
+        .map((id: number) => TMDB_GENRES[id]).filter(Boolean).join(', ') || 'Фильм';
+      return {
+        title:       m.title       || title,
+        year:        releaseYear,
+        poster:      m.poster_path   ? `https://image.tmdb.org/t/p/w500${m.poster_path}`    : '',
+        thumbnail:   m.backdrop_path ? `https://image.tmdb.org/t/p/w1280${m.backdrop_path}` : '',
+        genre,
+        description: m.overview || '',
+      };
+    } catch { return null; }
+  };
+
+  // Try Russian first (poster/title in RU), fall back to English for description if empty
+  const ru = await trySearch('ru-RU');
+  if (ru?.description) return ru;
+  const en = await trySearch('en-US');
+  return en ?? ru;
+}
+
 /** Run ffprobe on a video file and extract duration, audio streams, subtitle streams. */
 async function probeVideoFile(filePath: string): Promise<{
   duration: number;
@@ -384,12 +448,23 @@ dl.setOnCompleted(async (item) => {
 
     console.log(`[media] "${title}" → ${isDirectMp4 ? 'direct MP4' : 'HLS on-demand'}`);
 
+    // Fetch metadata from TMDB (uses filename → clean title → TMDB search)
+    const tmdb = await fetchTmdbMetadata(f.name);
+    const finalTitle       = tmdb?.title       ?? title;
+    const finalYear        = tmdb?.year        ?? new Date().getFullYear();
+    const finalGenre       = tmdb?.genre       ?? 'Фильм';
+    const finalDescription = tmdb?.description ?? '';
+    const finalPoster      = tmdb?.poster      || `https://picsum.photos/seed/${item.id}/400/600`;
+    const finalThumbnail   = tmdb?.thumbnail   || `https://picsum.photos/seed/${item.id}/800/450`;
+    if (tmdb) console.log(`[tmdb] matched "${f.name}" → "${finalTitle}" (${finalYear})`);
+
     const newItem: MediaItem = {
-      id: tempId, title,
-      poster: `https://picsum.photos/seed/${item.id}/400/600`,
-      thumbnail: `https://picsum.photos/seed/${item.id}/800/450`,
-      duration, year: new Date().getFullYear(),
-      genre: 'Downloaded', description: '',
+      id: tempId,
+      title: finalTitle,
+      poster: finalPoster,
+      thumbnail: finalThumbnail,
+      duration, year: finalYear,
+      genre: finalGenre, description: finalDescription,
       audio, subtitles,
       qualities: ['Auto'], status: 'ready', videoUrl,
     };
@@ -398,9 +473,9 @@ dl.setOnCompleted(async (item) => {
 
     await db.mediaItem.create({
       data: {
-        id: tempId, title, poster: newItem.poster,
-        thumbnail: newItem.thumbnail, duration, year: newItem.year,
-        genre: newItem.genre, description: newItem.description,
+        id: tempId, title: finalTitle, poster: finalPoster,
+        thumbnail: finalThumbnail, duration, year: finalYear,
+        genre: finalGenre, description: finalDescription,
         audio: audio as any, subtitles: subtitles as any,
         qualities: newItem.qualities as any, status: 'ready',
         videoUrl,

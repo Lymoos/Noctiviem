@@ -146,9 +146,12 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDel
             <Subtitles size={10} />
             <span>{item.subtitles.filter(s => s.id !== 'off').length}</span>
           </div>
-          <div className="flex items-center gap-1 text-xs text-slate-500">
+          <div
+            className="flex items-center gap-1 text-xs text-slate-500"
+            title={item.videoUrl.includes('.m3u8') ? 'HLS — адаптивный стриминг' : item.qualities[item.qualities.length - 1]}
+          >
             <Wifi size={10} />
-            <span>{item.qualities[item.qualities.length - 1]}</span>
+            <span>{item.videoUrl.includes('.m3u8') ? 'HLS' : item.qualities[item.qualities.length - 1]}</span>
           </div>
         </div>
       </div>

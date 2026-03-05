@@ -344,13 +344,9 @@ export default function Dashboard() {
             <Clapperboard size={16} className="text-green-400" />
             <h2 className="section-title">{t.activeHallsSection}</h2>
             <div className="section-line" />
-            <button
-              onClick={() => handleOpenCreate()}
-              className="btn-ghost text-xs flex items-center gap-1 py-1"
-            >
-              <Plus size={12} />
-              {t.newHall}
-            </button>
+            {myRooms.length > 0 && (
+              <span className="text-xs text-slate-500">{myRooms.length}</span>
+            )}
           </div>
 
           {myRooms.length === 0 ? (
