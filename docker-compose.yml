@@ -28,6 +28,7 @@ services:
       PORT: 3001
       DOWNLOADS_DIR: /data/downloads
       UPLOADS_DIR: /data/uploads
+      TMDB_API_KEY: ${TMDB_API_KEY:-d21471b69050d255ea5f5db1610ddf90}
     volumes:
       - downloads_data:/data/downloads
       - uploads_data:/data/uploads
