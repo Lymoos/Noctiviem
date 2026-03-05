@@ -195,12 +195,24 @@ async function buildAudioArgs(inputPath: string): Promise<string[]> {
   }
 }
 
+/** Returns the primary video codec name ('hevc', 'h264', etc.) from ffprobe. */
+async function getVideoCodec(filePath: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'quiet', '-select_streams', 'v:0',
+      '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', filePath,
+    ], { timeout: 15000 });
+    return stdout.trim().toLowerCase();
+  } catch { return ''; }
+}
+
 /**
  * Remux a video file to MP4.
  * - Copies video stream (no re-encode)
  * - Copies audio streams already in browser-safe codecs (AAC/MP3/Opus/Vorbis)
  * - Transcodes only non-compatible audio streams to AAC
  * - Maps every audio stream so multilingual tracks are preserved
+ * - Adds -tag:v hvc1 for HEVC so Chrome plays it without hardware-decoder quirks
  * Returns the .mp4 path; if input is already .mp4/.webm, returns it unchanged.
  */
 async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void): Promise<string> {
@@ -209,12 +221,14 @@ async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void
   const outputPath = inputPath.slice(0, -ext.length) + '.mp4';
   if (fs.existsSync(outputPath)) return outputPath;
   console.log(`[remux] ${path.basename(inputPath)} → mp4`);
-  const audioArgs = await buildAudioArgs(inputPath);
+  const [audioArgs, videoCodec] = await Promise.all([buildAudioArgs(inputPath), getVideoCodec(inputPath)]);
+  const isHevc = videoCodec === 'hevc';
   await ffmpegSpawn([
     '-i', inputPath,
     '-map', '0:v:0',          // first video stream only (avoids DV dual-layer duration issues)
     '-map', '0:a',            // all audio streams
     '-c:v', 'copy',           // copy video — no re-encode
+    ...(isHevc ? ['-tag:v', 'hvc1'] : []),  // Chrome requires hvc1 tag for HEVC in MP4
     ...audioArgs,             // per-stream: copy if already browser-safe, else → aac
     '-map_metadata', '0',
     '-map_metadata:s', '0:s',
@@ -1130,6 +1144,32 @@ async function repairMediaLibrary() {
         }
       } catch (e: any) {
         console.error(`[repair] audio fix failed for "${item.title}":`, e.message);
+      }
+    }
+
+    // HEVC (x265) in MP4 without the hvc1 tag won't play in Chrome.
+    // Switch these entries to HLS on-demand: MPEG-TS segments don't need hvc1,
+    // and ffmpeg re-encodes audio per-segment so any remaining AC3 is also fixed.
+    if (path.extname(filePath).toLowerCase() === '.mp4') {
+      try {
+        const codec = await getVideoCodec(filePath);
+        if (codec === 'hevc') {
+          const relPath = path.relative(dl.DOWNLOADS_DIR, filePath);
+          const hlsUrl = `/hls-mkv/${item.id}/index.m3u8?p=${encodeURIComponent(relPath)}`;
+          item.videoUrl = hlsUrl;
+          const { duration, audio, subtitles } = await probeVideoFile(filePath);
+          item.duration = Math.round(duration);
+          item.audio = audio;
+          item.subtitles = subtitles;
+          await db.mediaItem.update({
+            where: { id: item.id },
+            data: { videoUrl: hlsUrl, duration: Math.round(duration), audio: audio as any, subtitles: subtitles as any },
+          }).catch((e: Error) => console.error('[repair] DB update failed:', e.message));
+          console.log(`[repair] HEVC MP4 switched to HLS: "${item.title}"`);
+          continue;
+        }
+      } catch (e: any) {
+        console.error(`[repair] HEVC check failed for "${item.title}":`, e.message);
       }
     }
 
