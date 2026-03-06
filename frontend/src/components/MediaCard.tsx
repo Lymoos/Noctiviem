@@ -63,6 +63,28 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDel
           </div>
         )}
 
+        {/* Converting to MP4 overlay — shows while background remux runs */}
+        {item.status === 'ready' && (item as any).converting && (
+          <div className="absolute inset-0 bg-cinema-bg/60 flex flex-col items-center justify-center gap-2 px-4 pointer-events-none">
+            <div className="w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
+            <span className="text-[10px] text-green-400 font-medium">MP4</span>
+            {(item as any).convertingProgress !== undefined && (
+              <div className="w-full">
+                <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                  <span>Конвертация…</span>
+                  <span>{(item as any).convertingProgress}%</span>
+                </div>
+                <div className="h-0.5 w-full bg-white/10 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-1000"
+                    style={{ width: `${(item as any).convertingProgress}%`, background: 'linear-gradient(90deg, #22c55e, #3b82f6)' }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Error overlay */}
         {item.status === 'error' && (
           <div className="absolute inset-0 bg-cinema-bg/70 flex items-center justify-center">

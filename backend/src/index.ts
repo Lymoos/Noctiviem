@@ -80,19 +80,39 @@ const HLS_SEG_SECS = 10;
 // one ffmpeg invocation. Entries expire 2 minutes after generation.
 const hlsSegCache = new Map<string, Promise<Buffer>>();
 
-function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio = true): Promise<Buffer> {
+function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio = true, totalSegs?: number): Promise<Buffer> {
   const key = `${mediaId}:${idx}`;
   if (hlsSegCache.has(key)) return hlsSegCache.get(key)!;
 
+  // Pre-warm next 3 segments so they are ready before the player needs them.
+  // This eliminates the visible stall at every 10-second segment boundary.
+  for (let ahead = 1; ahead <= 3; ahead++) {
+    const nextIdx = idx + ahead;
+    if (totalSegs !== undefined && nextIdx >= totalSegs) break;
+    const nextKey = `${mediaId}:${nextIdx}`;
+    if (!hlsSegCache.has(nextKey)) {
+      getHlsSegment(filePath, mediaId, nextIdx, hasAudio, totalSegs).catch(() => {});
+    }
+  }
+
   const startTime = idx * HLS_SEG_SECS;
+  // For non-zero segments add a 1.5s pre-roll so E-AC-3 / EAC-3 decoders
+  // have enough context to produce clean audio at the segment boundary.
+  const preRoll  = idx > 0 ? 1.5 : 0;
+  const seekTime = Math.max(0, startTime - preRoll);
+
   const p = new Promise<Buffer>((resolve, reject) => {
+    // aresample=async=1000 keeps A/V in sync even when codec pre-roll shifts
+    // the audio PTS slightly — ffmpeg will add/drop samples as needed.
     const audioArgs = hasAudio
-      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
+      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+         '-af', 'aresample=async=1000']
       : [];
     const proc = spawn('ffmpeg', [
-      '-ss', String(startTime),
+      '-ss', String(seekTime),          // fast-seek to pre-roll start
       '-i', filePath,
-      '-t', String(HLS_SEG_SECS),
+      '-t', String(HLS_SEG_SECS + preRoll), // include pre-roll in read window
+      '-ss', String(preRoll),           // skip pre-roll from output (accurate trim)
       '-map', '0:v:0',
       ...audioArgs,
       '-c:v', 'copy',
@@ -112,7 +132,7 @@ function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio 
     proc.on('error', reject);
   });
 
-  p.then(() => setTimeout(() => hlsSegCache.delete(key), 120_000))
+  p.then(() => setTimeout(() => hlsSegCache.delete(key), 180_000))
    .catch(() => hlsSegCache.delete(key));
 
   hlsSegCache.set(key, p);
@@ -271,6 +291,38 @@ async function backgroundRemux(mediaId: string, inputPath: string, title: string
   }
 
   console.log(`[bg-remux] starting "${title}" (${(fileSize / 1e9).toFixed(1)} GB) → mp4`);
+
+  // Mark item as converting so the frontend can show a progress bar
+  const markConverting = (pct?: number) => {
+    const it = mediaLibrary.find(m => m.id === mediaId);
+    if (!it) return;
+    (it as any).converting = true;
+    if (pct !== undefined) (it as any).convertingProgress = pct;
+  };
+  const clearConverting = () => {
+    const it = mediaLibrary.find(m => m.id === mediaId);
+    if (!it) return;
+    delete (it as any).converting;
+    delete (it as any).convertingProgress;
+  };
+
+  markConverting(0);
+  io.emit('media:updated', mediaLibrary);
+
+  // Throttle progress events (emit at most once per 3 s)
+  let lastProgressEmit = 0;
+  const onProgress = (secs: number) => {
+    const it = mediaLibrary.find(m => m.id === mediaId);
+    if (!it) return;
+    const pct = Math.min(99, Math.round((secs / (it.duration || 1)) * 100));
+    (it as any).convertingProgress = pct;
+    const now = Date.now();
+    if (now - lastProgressEmit > 3000) {
+      lastProgressEmit = now;
+      io.emit('media:updated', mediaLibrary);
+    }
+  };
+
   try {
     const [audioArgs, videoCodec] = await Promise.all([buildAudioArgs(inputPath), getVideoCodec(inputPath)]);
     const isHevc = videoCodec === 'hevc';
@@ -285,8 +337,9 @@ async function backgroundRemux(mediaId: string, inputPath: string, title: string
       '-map_metadata', '0',
       '-movflags', '+faststart',  // moov atom at beginning → instant browser seeking
       outputPath,
-    ], { timeout: 4 * 60 * 60 * 1000 });
+    ], { timeout: 4 * 60 * 60 * 1000, onProgress });
 
+    clearConverting();
     console.log(`[bg-remux] done "${title}" → mp4 — switching media item`);
 
     // Switch media item to MP4
@@ -296,6 +349,10 @@ async function backgroundRemux(mediaId: string, inputPath: string, title: string
     const item = mediaLibrary.find(m => m.id === mediaId);
     if (item) {
       item.videoUrl = mp4Url;
+      // Clear HLS segment cache for this item so stale segments are not served
+      for (const k of Array.from(hlsSegCache.keys())) {
+        if (k.startsWith(mediaId + ':')) hlsSegCache.delete(k);
+      }
     }
     await db.mediaItem.update({
       where:  { id: mediaId },
@@ -318,6 +375,8 @@ async function backgroundRemux(mediaId: string, inputPath: string, title: string
     }, 60_000);
 
   } catch (e: any) {
+    clearConverting();
+    io.emit('media:updated', mediaLibrary);
     console.error(`[bg-remux] failed for "${title}":`, e.message);
     // Clean up partial output
     if (fs.existsSync(outputPath)) fs.promises.unlink(outputPath).catch(() => {});
@@ -638,7 +697,8 @@ app.get('/hls-mkv/:id/seg/:idx.ts', async (req: Request, res: Response) => {
   try {
     const mediaItem = mediaLibrary.find(m => m.id === id);
     const hasAudio  = !mediaItem || mediaItem.audio.length > 0;
-    const data = await getHlsSegment(filePath, id, idx, hasAudio);
+    const totalSegs = mediaItem?.duration ? Math.ceil(mediaItem.duration / HLS_SEG_SECS) : undefined;
+    const data = await getHlsSegment(filePath, id, idx, hasAudio, totalSegs);
     res.setHeader('Content-Type', 'video/MP2T');
     res.setHeader('Content-Length', String(data.length));
     res.setHeader('Cache-Control', 'public, max-age=3600');
