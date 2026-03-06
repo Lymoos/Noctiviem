@@ -80,20 +80,25 @@ const HLS_SEG_SECS = 10;
 // one ffmpeg invocation. Entries expire 2 minutes after generation.
 const hlsSegCache = new Map<string, Promise<Buffer>>();
 
-function getHlsSegment(filePath: string, mediaId: string, idx: number): Promise<Buffer> {
+function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio = true): Promise<Buffer> {
   const key = `${mediaId}:${idx}`;
   if (hlsSegCache.has(key)) return hlsSegCache.get(key)!;
 
   const startTime = idx * HLS_SEG_SECS;
   const p = new Promise<Buffer>((resolve, reject) => {
+    const audioArgs = hasAudio
+      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
+      : [];
     const proc = spawn('ffmpeg', [
       '-ss', String(startTime),
       '-i', filePath,
       '-t', String(HLS_SEG_SECS),
       '-map', '0:v:0',
-      '-map', '0:a:0',      // first audio track (HLS multi-track needs EXT-X-MEDIA, future work)
-      '-c:v', 'copy',       // stream copy video — no re-encode, very fast
-      '-c:a', 'aac', '-b:a', '192k', '-ac', '2',  // AAC stereo required for MPEG-TS
+      ...audioArgs,
+      '-c:v', 'copy',
+      '-avoid_negative_ts', 'make_zero',
+      '-reset_timestamps', '1',
+      '-max_muxing_queue_size', '1024',
       '-f', 'mpegts',
       'pipe:1',
     ], { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -243,6 +248,80 @@ async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void
     console.warn(`[remux] could not delete original: ${e.message}`);
   }
   return outputPath;
+}
+
+
+// ─── Background MP4 conversion ────────────────────────────────────────────────
+// Converts HLS-served files to proper MP4 with +faststart for native browser
+// seeking. Runs in background after download completes so the file is
+// immediately watchable via HLS, then switches to MP4 when done.
+
+const BACKGROUND_REMUX_SIZE_LIMIT = 8 * 1024 * 1024 * 1024; // 8 GB
+
+async function backgroundRemux(mediaId: string, inputPath: string, title: string): Promise<void> {
+  const ext = path.extname(inputPath).toLowerCase();
+  if (ext === '.mp4' || ext === '.webm') return; // already compatible
+  const outputPath = inputPath.slice(0, -ext.length) + '.mp4';
+  if (fs.existsSync(outputPath)) return;
+
+  const fileSize = fs.existsSync(inputPath) ? fs.statSync(inputPath).size : 0;
+  if (fileSize === 0 || fileSize > BACKGROUND_REMUX_SIZE_LIMIT) {
+    console.log(`[bg-remux] skipping "${title}" — size ${(fileSize / 1e9).toFixed(1)} GB exceeds limit`);
+    return;
+  }
+
+  console.log(`[bg-remux] starting "${title}" (${(fileSize / 1e9).toFixed(1)} GB) → mp4`);
+  try {
+    const [audioArgs, videoCodec] = await Promise.all([buildAudioArgs(inputPath), getVideoCodec(inputPath)]);
+    const isHevc = videoCodec === 'hevc';
+
+    await ffmpegSpawn([
+      '-i', inputPath,
+      '-map', '0:v:0',
+      '-map', '0:a',
+      '-c:v', 'copy',
+      ...(isHevc ? ['-tag:v', 'hvc1'] : []),
+      ...audioArgs,
+      '-map_metadata', '0',
+      '-movflags', '+faststart',  // moov atom at beginning → instant browser seeking
+      outputPath,
+    ], { timeout: 4 * 60 * 60 * 1000 });
+
+    console.log(`[bg-remux] done "${title}" → mp4 — switching media item`);
+
+    // Switch media item to MP4
+    const relPath = path.relative(dl.DOWNLOADS_DIR, outputPath);
+    const mp4Url  = '/media/' + relPath.split(path.sep).map(encodeURIComponent).join('/');
+
+    const item = mediaLibrary.find(m => m.id === mediaId);
+    if (item) {
+      item.videoUrl = mp4Url;
+    }
+    await db.mediaItem.update({
+      where:  { id: mediaId },
+      data:   { videoUrl: mp4Url },
+    }).catch((e: Error) => console.warn('[bg-remux] DB update failed:', e.message));
+
+    io.emit('media:updated', mediaLibrary);
+    console.log(`[bg-remux] "${title}" switched to MP4`);
+
+    // Delete original after brief grace period (lets any active HLS sessions finish)
+    setTimeout(async () => {
+      try {
+        if (fs.existsSync(inputPath)) {
+          await fs.promises.unlink(inputPath);
+          console.log(`[bg-remux] deleted original ${path.basename(inputPath)}`);
+        }
+      } catch (e: any) {
+        console.warn('[bg-remux] could not delete original:', e.message);
+      }
+    }, 60_000);
+
+  } catch (e: any) {
+    console.error(`[bg-remux] failed for "${title}":`, e.message);
+    // Clean up partial output
+    if (fs.existsSync(outputPath)) fs.promises.unlink(outputPath).catch(() => {});
+  }
 }
 
 // ─── TMDB metadata ────────────────────────────────────────────────────────────
@@ -458,6 +537,12 @@ dl.setOnCompleted(async (item) => {
     const finalThumbnail   = tmdb?.thumbnail   || `https://picsum.photos/seed/${item.id}/800/450`;
     if (tmdb) console.log(`[tmdb] matched "${f.name}" → "${finalTitle}" (${finalYear})`);
 
+    // Start background MP4 conversion (non-blocking) — file immediately watchable via HLS,
+    // switches to faststart MP4 when done for native browser seeking
+    setImmediate(() => {
+      backgroundRemux(tempId, filePath, finalTitle).catch(console.error);
+    });
+
     const newItem: MediaItem = {
       id: tempId,
       title: finalTitle,
@@ -551,7 +636,9 @@ app.get('/hls-mkv/:id/seg/:idx.ts', async (req: Request, res: Response) => {
   if (!fs.existsSync(filePath)) { res.status(404).end(); return; }
 
   try {
-    const data = await getHlsSegment(filePath, id, idx);
+    const mediaItem = mediaLibrary.find(m => m.id === id);
+    const hasAudio  = !mediaItem || mediaItem.audio.length > 0;
+    const data = await getHlsSegment(filePath, id, idx, hasAudio);
     res.setHeader('Content-Type', 'video/MP2T');
     res.setHeader('Content-Length', String(data.length));
     res.setHeader('Cache-Control', 'public, max-age=3600');

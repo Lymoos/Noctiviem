@@ -45,6 +45,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   const [subsMenuOpen, setSubsMenuOpen] = useState(false)
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
+  const [hlsError, setHlsError] = useState(false)
 
   const selectedAudio = room?.selectedAudio ?? 0
   const selectedSubs = room?.selectedSubs ?? 'off'
@@ -68,6 +69,12 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
         const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 })
         hls.loadSource(media.videoUrl)
         hls.attachMedia(video)
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) {
+            console.error('[hls] fatal error:', data.type, data.details)
+            setHlsError(true)
+          }
+        })
         hlsRef.current = hls
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Safari native HLS
@@ -283,6 +290,21 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
       />
 
       {/* Sync indicator */}
+      {/* HLS fatal error overlay */}
+      {hlsError && (
+        <div className="absolute inset-0 z-20 bg-black/85 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="text-4xl">⚠️</div>
+          <p className="text-sm font-semibold text-red-400">Ошибка воспроизведения</p>
+          <p className="text-xs text-slate-400">Не удалось загрузить видео.<br/>Файл может быть повреждён или формат не поддерживается.</p>
+          <button
+            onClick={() => { setHlsError(false); if (hlsRef.current) hlsRef.current.loadSource(media.videoUrl) }}
+            className="mt-2 px-4 py-2 text-xs bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+          >
+            Попробовать снова
+          </button>
+        </div>
+      )}
+
       {isSyncing && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 glass px-3 py-1.5 rounded-full text-xs text-purple-300 flex items-center gap-2">
           <Gauge size={12} className="animate-spin" />
