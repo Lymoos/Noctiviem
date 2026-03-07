@@ -96,23 +96,15 @@ function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio 
   }
 
   const startTime = idx * HLS_SEG_SECS;
-  // For non-zero segments add a 1.5s pre-roll so E-AC-3 / EAC-3 decoders
-  // have enough context to produce clean audio at the segment boundary.
-  const preRoll  = idx > 0 ? 1.5 : 0;
-  const seekTime = Math.max(0, startTime - preRoll);
 
   const p = new Promise<Buffer>((resolve, reject) => {
-    // aresample=async=1000 keeps A/V in sync even when codec pre-roll shifts
-    // the audio PTS slightly — ffmpeg will add/drop samples as needed.
     const audioArgs = hasAudio
-      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
-         '-af', 'aresample=async=1000']
+      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
       : [];
     const proc = spawn('ffmpeg', [
-      '-ss', String(seekTime),          // fast-seek to pre-roll start
+      '-ss', String(startTime),
       '-i', filePath,
-      '-t', String(HLS_SEG_SECS + preRoll), // include pre-roll in read window
-      '-ss', String(preRoll),           // skip pre-roll from output (accurate trim)
+      '-t', String(HLS_SEG_SECS),
       '-map', '0:v:0',
       ...audioArgs,
       '-c:v', 'copy',
