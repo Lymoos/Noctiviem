@@ -31,6 +31,9 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   const hlsRef = useRef<Hls | null>(null)
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Last known playback position — used to resume after an HLS source swap
+  // (audio-track change reloads the manifest, which would otherwise restart at 0).
+  const resumeTimeRef = useRef(serverTime)
 
   const isLeader = useStore(selectIsLeader)
   const room = useStore(s => s.room)
@@ -52,8 +55,13 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   const selectedQuality = room?.selectedQuality ?? 'Auto'
   const reactions = room?.reactions ?? []
 
-  // Attach video source: plain MP4/WebM or HLS (.m3u8) via hls.js
+  // Attach video source: plain MP4/WebM or HLS (.m3u8) via hls.js.
+  // For HLS the chosen audio track is encoded in the manifest URL (?a=N) — the
+  // backend muxes that audio stream into each segment, so switching audio just
+  // reloads the source. media.videoUrl already carries ?p=…, so append &a=.
   const isHls = media.videoUrl.includes('.m3u8')
+  const hlsSrc = isHls ? `${media.videoUrl}&a=${selectedAudio}` : media.videoUrl
+
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
@@ -64,11 +72,17 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
       hlsRef.current = null
     }
 
+    // Restore position after a source swap (audio-track change). On first mount
+    // resumeTimeRef === serverTime so a fresh join still starts at the right spot.
+    const seekTo = resumeTimeRef.current
+    const resume = () => { if (seekTo > 0.5) { try { video.currentTime = seekTo } catch {} } }
+
     if (isHls) {
       if (Hls.isSupported()) {
         const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 })
-        hls.loadSource(media.videoUrl)
+        hls.loadSource(hlsSrc)
         hls.attachMedia(video)
+        hls.on(Hls.Events.MANIFEST_PARSED, resume)
         hls.on(Hls.Events.ERROR, (_, data) => {
           if (data.fatal) {
             console.error('[hls] fatal error:', data.type, data.details)
@@ -78,7 +92,8 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
         hlsRef.current = hls
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Safari native HLS
-        video.src = media.videoUrl
+        video.src = hlsSrc
+        video.addEventListener('loadedmetadata', resume, { once: true })
       }
     } else {
       video.src = media.videoUrl
@@ -90,7 +105,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
         hlsRef.current = null
       }
     }
-  }, [media.videoUrl, isHls])
+  }, [hlsSrc, isHls, media.videoUrl])
 
   // Sync video with server state
   useEffect(() => {
@@ -253,33 +268,34 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   return (
     <div
       ref={containerRef}
-      className="relative bg-black overflow-hidden vignette group w-full"
+      className="relative w-full h-full bg-black overflow-hidden vignette group"
       style={{ borderRadius: fullscreen ? 0 : '2px' }}
       onMouseMove={showControls}
       onMouseLeave={() => isPlaying && setControlsVisible(false)}
     >
-      {/* Video */}
+      {/* Video — fills the container, letterboxed to keep aspect ratio */}
       <video
         ref={videoRef}
-        className="w-full"
+        className="absolute inset-0 w-full h-full"
         style={{
-          display: 'block',
           objectFit: 'contain',
+          background: '#000',
           cursor: isLeader ? 'pointer' : 'default',
-          height: fullscreen ? '100vh' : 'auto',
-          maxHeight: fullscreen ? '100vh' : 'calc(100vh - 200px)',
         }}
         playsInline
         preload="metadata"
         onTimeUpdate={() => {
           const t = videoRef.current?.currentTime ?? 0
+          resumeTimeRef.current = t
           setCurrentTime(t)
           onTimeUpdate?.(t)
         }}
         onLoadedMetadata={() => {
           setDuration(videoRef.current?.duration ?? media.duration)
-          if (serverTime > 0 && videoRef.current) {
-            videoRef.current.currentTime = serverTime
+          // Seek to the last known position (serverTime on first load, current
+          // position after an audio-track source swap).
+          if (resumeTimeRef.current > 0.5 && videoRef.current) {
+            videoRef.current.currentTime = resumeTimeRef.current
           }
           // Initialize audio tracks — disable all except the selected one.
           // Without this, Chrome plays all tracks at once when multiple exist.

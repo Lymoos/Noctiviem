@@ -370,13 +370,15 @@ export default function Room() {
         <div className="flex-1 flex min-h-0 overflow-hidden">
           {/* Video — fills remaining space */}
           <div className="flex-1 min-w-0 min-h-0 bg-black flex flex-col items-stretch relative">
-            <VideoPlayer
-              media={media}
-              serverTime={room.currentTime}
-              isPlaying={room.isPlaying}
-              onTimeUpdate={setCurrentVideoTime}
-              onEnded={() => {}}
-            />
+            <div className="flex-1 min-h-0 relative">
+              <VideoPlayer
+                media={media}
+                serverTime={room.currentTime}
+                isPlaying={room.isPlaying}
+                onTimeUpdate={setCurrentVideoTime}
+                onEnded={() => {}}
+              />
+            </div>
 
             {/* Up Next banner */}
             {room.queuedMediaId && (
@@ -428,7 +430,7 @@ export default function Room() {
               <div className="cinema-curtain-l" />
               <div className="cinema-curtain-r" />
 
-              <div className="cinema-screen-frame" style={{ width: '72%', maxWidth: 'calc(56vh * (16 / 9))' }}>
+              <div className="cinema-screen-frame aspect-video" style={{ width: '72%', maxWidth: 'calc(56vh * (16 / 9))' }}>
                 <VideoPlayer
                   media={media}
                   serverTime={room.currentTime}

@@ -74,32 +74,51 @@ const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis']);
 // we generate 10-second MPEG-TS segments on-demand using ffmpeg stream copy.
 // Files become available immediately after download — no waiting for conversion.
 const HLS_SEG_SECS = 10;
+// How many segments ahead to pre-warm per request. Bounded + non-cascading.
+const HLS_PREWARM = 2;
+// Hard cap on simultaneously running segment ffmpeg processes. Prevents a
+// Leader scrubbing the timeline (or many clients) from spawning an unbounded
+// number of encoders and pinning the box.
+const HLS_MAX_CONCURRENT = 4;
 
-// Promise cache: key = `${mediaId}:${segIdx}` → Buffer promise.
+// Promise cache: key = `${mediaId}:${segIdx}:a${audioIdx}` → Buffer promise.
 // Concurrent requests for the same segment (watch-party clients in sync) share
 // one ffmpeg invocation. Entries expire 2 minutes after generation.
 const hlsSegCache = new Map<string, Promise<Buffer>>();
 
-function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio = true, totalSegs?: number): Promise<Buffer> {
-  const key = `${mediaId}:${idx}`;
-  if (hlsSegCache.has(key)) return hlsSegCache.get(key)!;
+// Simple concurrency gate for segment encoders.
+let hlsRunning = 0;
+const hlsWaitQueue: (() => void)[] = [];
+function acquireHlsSlot(): Promise<void> {
+  if (hlsRunning < HLS_MAX_CONCURRENT) { hlsRunning++; return Promise.resolve(); }
+  return new Promise<void>(res => hlsWaitQueue.push(res)).then(() => { hlsRunning++; });
+}
+function releaseHlsSlot(): void {
+  hlsRunning = Math.max(0, hlsRunning - 1);
+  hlsWaitQueue.shift()?.();
+}
 
-  // Pre-warm next 3 segments so they are ready before the player needs them.
-  // This eliminates the visible stall at every 10-second segment boundary.
-  for (let ahead = 1; ahead <= 3; ahead++) {
-    const nextIdx = idx + ahead;
-    if (totalSegs !== undefined && nextIdx >= totalSegs) break;
-    const nextKey = `${mediaId}:${nextIdx}`;
-    if (!hlsSegCache.has(nextKey)) {
-      getHlsSegment(filePath, mediaId, nextIdx, hasAudio, totalSegs).catch(() => {});
-    }
-  }
+/**
+ * Generate (or return the cached promise for) a single MPEG-TS segment.
+ * `audioIdx` selects which audio stream is muxed in (0-based among audio
+ * streams) so multi-language tracks are switchable: the player reloads the
+ * playlist with a different ?a=N when the Leader changes the audio track.
+ *
+ * This NEVER triggers pre-warm — getHlsSegment() is the only warmer and it
+ * calls this directly, so warming can't cascade across the whole file (the old
+ * bug spawned one ffmpeg per remaining segment on a single request).
+ */
+function generateHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio: boolean, audioIdx: number): Promise<Buffer> {
+  const key = `${mediaId}:${idx}:a${audioIdx}`;
+  const cached = hlsSegCache.get(key);
+  if (cached) return cached;
 
   const startTime = idx * HLS_SEG_SECS;
 
-  const p = new Promise<Buffer>((resolve, reject) => {
+  const p = acquireHlsSlot().then(() => new Promise<Buffer>((resolve, reject) => {
+    // `0:a:N?` — optional map, so a bad index doesn't fail the whole segment.
     const audioArgs = hasAudio
-      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
+      ? ['-map', `0:a:${audioIdx}?`, '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
       : [];
     const proc = spawn('ffmpeg', [
       '-ss', String(startTime),
@@ -118,17 +137,30 @@ function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio 
     const chunks: Buffer[] = [];
     proc.stdout!.on('data', (c: Buffer) => chunks.push(c));
     proc.on('close', code => {
+      releaseHlsSlot();
       if (code === 0) resolve(Buffer.concat(chunks));
       else reject(new Error(`ffmpeg segment ${idx} exited ${code}`));
     });
-    proc.on('error', reject);
-  });
+    proc.on('error', err => { releaseHlsSlot(); reject(err); });
+  }));
 
   p.then(() => setTimeout(() => hlsSegCache.delete(key), 180_000))
    .catch(() => hlsSegCache.delete(key));
 
   hlsSegCache.set(key, p);
   return p;
+}
+
+function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio = true, totalSegs?: number, audioIdx = 0): Promise<Buffer> {
+  const seg = generateHlsSegment(filePath, mediaId, idx, hasAudio, audioIdx);
+  // Pre-warm a *bounded* number of upcoming segments so the player doesn't
+  // stall at boundaries. Calls generateHlsSegment directly → never cascades.
+  for (let ahead = 1; ahead <= HLS_PREWARM; ahead++) {
+    const nextIdx = idx + ahead;
+    if (totalSegs !== undefined && nextIdx >= totalSegs) break;
+    generateHlsSegment(filePath, mediaId, nextIdx, hasAudio, audioIdx).catch(() => {});
+  }
+  return seg;
 }
 
 /** Returns true if any audio stream in the file uses a non-browser-safe codec. */
@@ -569,9 +601,16 @@ dl.setOnCompleted(async (item) => {
     const relPath = path.relative(dl.DOWNLOADS_DIR, filePath);
     const ext     = path.extname(filePath).toLowerCase();
 
-    // If already a browser-compatible MP4 (AAC/MP3/Opus audio), serve directly.
-    // Otherwise stream via HLS on-demand — no full-file copy needed, available instantly.
-    const isDirectMp4 = (ext === '.mp4') && !(await needsAudioFix(filePath).catch(() => true));
+    // Serve directly only if it's an MP4 with browser-safe audio AND a
+    // browser-safe video codec. HEVC/x265 inside MP4 needs the `hvc1` tag to
+    // play in Chrome, which a raw download won't have → stream via HLS instead
+    // (MPEG-TS doesn't need the tag, and background remux later produces a
+    // proper tagged MP4). Everything else also streams via HLS on-demand.
+    const [audioNeedsFix, vcodec] = await Promise.all([
+      needsAudioFix(filePath).catch(() => true),
+      getVideoCodec(filePath).catch(() => ''),
+    ]);
+    const isDirectMp4 = ext === '.mp4' && !audioNeedsFix && vcodec !== 'hevc' && vcodec !== 'h265';
     const videoUrl = isDirectMp4
       ? '/media/' + relPath.split('/').map(encodeURIComponent).join('/')
       : `/hls-mkv/${tempId}/index.m3u8?p=${encodeURIComponent(relPath)}`;
@@ -650,7 +689,10 @@ app.get('/hls-mkv/:id/index.m3u8', (req: Request, res: Response) => {
 
   const duration = item.duration || 0;
   const numSegs  = Math.ceil(duration / HLS_SEG_SECS) || 1;
-  const pParam   = `p=${encodeURIComponent(encodedRel)}`;
+  // Audio track index (0-based among audio streams). The player requests the
+  // manifest with ?a=N when the Leader switches audio; segments inherit it.
+  const audioIdx = Math.max(0, parseInt((req.query.a as string) ?? '0') || 0);
+  const pParam   = `p=${encodeURIComponent(encodedRel)}&a=${audioIdx}`;
 
   const lines: string[] = [
     '#EXTM3U',
@@ -690,7 +732,8 @@ app.get('/hls-mkv/:id/seg/:idx.ts', async (req: Request, res: Response) => {
     const mediaItem = mediaLibrary.find(m => m.id === id);
     const hasAudio  = !mediaItem || mediaItem.audio.length > 0;
     const totalSegs = mediaItem?.duration ? Math.ceil(mediaItem.duration / HLS_SEG_SECS) : undefined;
-    const data = await getHlsSegment(filePath, id, idx, hasAudio, totalSegs);
+    const audioIdx  = Math.max(0, parseInt((req.query.a as string) ?? '0') || 0);
+    const data = await getHlsSegment(filePath, id, idx, hasAudio, totalSegs, audioIdx);
     res.setHeader('Content-Type', 'video/MP2T');
     res.setHeader('Content-Length', String(data.length));
     res.setHeader('Cache-Control', 'public, max-age=3600');
