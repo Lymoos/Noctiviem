@@ -70,7 +70,8 @@ export interface MediaItem {
   genre: string;
   description: string;
   audio: { id: number; label: string; lang: string }[];
-  subtitles: { id: string; label: string; lang: string }[];
+  // `src` (when present) is a served WebVTT URL rendered as a <track> element.
+  subtitles: { id: string; label: string; lang: string; src?: string }[];
   qualities: string[];
   status: 'ready' | 'processing' | 'error';
   videoUrl: string;

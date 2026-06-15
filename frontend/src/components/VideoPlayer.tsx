@@ -265,6 +265,22 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
     applyAudioTrack(selectedAudio)
   }, [selectedAudio, applyAudioTrack])
 
+  // Subtitles: WebVTT <track>s are toggled via the native textTracks API.
+  // Track order matches the rendered <track> order (subtitles that have a src).
+  const applySubtitleTrack = useCallback((subId: string) => {
+    const video = videoRef.current
+    if (!video) return
+    const subTracks = media.subtitles.filter(s => s.src)
+    const tt = video.textTracks
+    for (let i = 0; i < tt.length && i < subTracks.length; i++) {
+      tt[i].mode = subTracks[i].id === subId ? 'showing' : 'disabled'
+    }
+  }, [media.subtitles])
+
+  useEffect(() => {
+    applySubtitleTrack(selectedSubs)
+  }, [selectedSubs, applySubtitleTrack])
+
   return (
     <div
       ref={containerRef}
@@ -300,10 +316,15 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           // Initialize audio tracks — disable all except the selected one.
           // Without this, Chrome plays all tracks at once when multiple exist.
           applyAudioTrack(selectedAudio)
+          applySubtitleTrack(selectedSubs)
         }}
         onEnded={() => onEnded?.()}
         onClick={handlePlayPause}
-      />
+      >
+        {media.subtitles.filter(s => s.src).map(s => (
+          <track key={s.id} kind="subtitles" src={s.src} srcLang={s.lang} label={s.label} />
+        ))}
+      </video>
 
       {/* Sync indicator */}
       {/* HLS fatal error overlay */}
@@ -467,7 +488,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
             </button>
             {subsMenuOpen && isLeader && (
               <div className="menu-dropdown absolute bottom-8 right-0 min-w-32">
-                {media.subtitles.map(s => (
+                {media.subtitles.filter(s => s.id === 'off' || s.src).map(s => (
                   <div
                     key={s.id}
                     onClick={() => handleSubs(s.id)}

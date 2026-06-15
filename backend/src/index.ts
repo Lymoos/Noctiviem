@@ -527,6 +527,126 @@ async function probeVideoFile(filePath: string): Promise<{
     return fallback;
   }
 }
+
+// ─── Subtitle extraction (embedded + external → WebVTT) ────────────────────────
+// Browsers render WebVTT via <track>. Each text-based subtitle stream is
+// extracted once, stored next to the video, and served via /media. Bitmap subs
+// (PGS/VobSub) can't become text and are skipped.
+const TEXT_SUB_CODECS = new Set(['subrip', 'srt', 'ass', 'ssa', 'webvtt', 'mov_text', 'text', 'stl']);
+const SUB_FILE_EXTS   = new Set(['.srt', '.vtt', '.ass', '.ssa']);
+
+interface SubEntry { id: string; label: string; lang: string; src?: string }
+
+function mediaUrlFor(absPath: string): string {
+  const rel = path.relative(dl.DOWNLOADS_DIR, absPath);
+  return '/media/' + rel.split(path.sep).map(encodeURIComponent).join('/');
+}
+
+function guessLangFromName(name: string): string {
+  const n = name.toLowerCase();
+  if (/(\b|_)(rus|russian|ru)(\b|_)/.test(n)) return 'rus';
+  if (/(\b|_)(eng|english|en)(\b|_)/.test(n)) return 'eng';
+  if (/(\b|_)(spa|spanish|es)(\b|_)/.test(n)) return 'spa';
+  if (/(\b|_)(fre|fra|french|fr)(\b|_)/.test(n)) return 'fre';
+  if (/(\b|_)(ger|deu|german|de)(\b|_)/.test(n)) return 'ger';
+  if (/(\b|_)(ukr|ukrainian|uk)(\b|_)/.test(n)) return 'ukr';
+  return 'und';
+}
+
+/** Extract embedded text subtitle streams to sibling .vtt files (ids `sub_<i>`). */
+async function extractEmbeddedSubtitles(filePath: string): Promise<SubEntry[]> {
+  let streams: any[] = [];
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'quiet', '-select_streams', 's',
+      '-show_entries', 'stream=codec_name:stream_tags=language,title',
+      '-of', 'json', filePath,
+    ], { timeout: 30000 });
+    streams = JSON.parse(stdout).streams ?? [];
+  } catch { return []; }
+
+  const dir  = path.dirname(filePath);
+  const base = path.basename(filePath, path.extname(filePath));
+  const out: SubEntry[] = [];
+
+  for (let i = 0; i < streams.length; i++) {
+    const codec = (streams[i].codec_name ?? '').toLowerCase();
+    if (!TEXT_SUB_CODECS.has(codec)) continue; // skip bitmap subs
+    const lang  = streams[i].tags?.language ?? 'und';
+    const title = streams[i].tags?.title;
+    const vttPath = path.join(dir, `${base}.s${i}.${lang}.vtt`);
+    try {
+      if (!fs.existsSync(vttPath)) {
+        await ffmpegSpawn(['-i', filePath, '-map', `0:s:${i}`, '-c:s', 'webvtt', vttPath], { timeout: 30 * 60 * 1000 });
+      }
+      out.push({
+        id: `sub_${i}`,
+        label: title ?? (lang !== 'und' ? lang.toUpperCase() : `Sub ${i + 1}`),
+        lang,
+        src: mediaUrlFor(vttPath),
+      });
+    } catch (e: any) {
+      console.warn(`[subs] extract stream ${i} failed: ${e.message}`);
+    }
+  }
+  return out;
+}
+
+/** Convert external subtitle files shipped in the torrent into served .vtt. */
+async function convertExternalSubtitles(subFiles: string[]): Promise<SubEntry[]> {
+  const out: SubEntry[] = [];
+  for (let i = 0; i < subFiles.length; i++) {
+    const f = subFiles[i];
+    if (!fs.existsSync(f)) continue;
+    const ext  = path.extname(f).toLowerCase();
+    const lang = guessLangFromName(path.basename(f));
+    try {
+      let vttPath = f;
+      if (ext !== '.vtt') {
+        vttPath = f.slice(0, -ext.length) + '.vtt';
+        if (!fs.existsSync(vttPath)) {
+          await ffmpegSpawn(['-i', f, '-c:s', 'webvtt', vttPath], { timeout: 5 * 60 * 1000 });
+        }
+      }
+      out.push({
+        id: `ext_${i}`,
+        label: lang !== 'und' ? lang.toUpperCase() : (path.basename(f, ext).slice(0, 20) || `Sub ${i + 1}`),
+        lang,
+        src: mediaUrlFor(vttPath),
+      });
+    } catch (e: any) {
+      console.warn(`[subs] external convert failed for ${path.basename(f)}: ${e.message}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Background: fill in WebVTT sources for a media item's subtitles (embedded +
+ * external) and broadcast the update. Safe to call repeatedly — already-present
+ * .vtt files are reused.
+ */
+async function attachSubtitles(mediaId: string, filePath: string, externalSubFiles: string[]): Promise<void> {
+  const item = mediaLibrary.find(m => m.id === mediaId);
+  if (!item) return;
+  const [embedded, external] = await Promise.all([
+    extractEmbeddedSubtitles(filePath).catch(() => [] as SubEntry[]),
+    convertExternalSubtitles(externalSubFiles).catch(() => [] as SubEntry[]),
+  ]);
+  if (embedded.length === 0 && external.length === 0) return;
+
+  const byId = new Map(embedded.map(e => [e.id, e]));
+  const merged: SubEntry[] = item.subtitles.map(s => byId.get(s.id) ?? s);
+  for (const e of embedded) if (!merged.some(m => m.id === e.id)) merged.push(e);
+  for (const e of external) merged.push(e);
+
+  item.subtitles = merged as MediaItem['subtitles'];
+  await db.mediaItem.update({ where: { id: mediaId }, data: { subtitles: merged as any } })
+    .catch((e: Error) => console.warn('[subs] DB update failed:', e.message));
+  io.emit('media:updated', mediaLibrary);
+  console.log(`[subs] "${item.title}" — ${embedded.length} embedded + ${external.length} external tracks`);
+}
+
 import * as rm from './roomManager';
 import * as auth from './auth';
 import * as dl from './downloads';
@@ -646,6 +766,21 @@ dl.setOnCompleted(async (item) => {
     mediaLibrary.push(newItem);
     item.mediaIds.push(tempId);
 
+    // Extract subtitles (embedded streams + external .srt/.ass from the torrent)
+    // in the background and attach them as WebVTT <track>s when ready.
+    const externalSubFiles = item.files
+      .filter(sf => SUB_FILE_EXTS.has(path.extname(sf.name).toLowerCase()))
+      .map(sf => {
+        let p = path.join(dl.DOWNLOADS_DIR, sf.path);
+        if (!fs.existsSync(p)) {
+          const flat = path.join(dl.DOWNLOADS_DIR, sf.name);
+          if (fs.existsSync(flat)) p = flat;
+        }
+        return p;
+      })
+      .filter(p => fs.existsSync(p));
+    setImmediate(() => { attachSubtitles(tempId, filePath, externalSubFiles).catch(console.error); });
+
     await db.mediaItem.create({
       data: {
         id: tempId, title: finalTitle, poster: finalPoster,
@@ -669,6 +804,7 @@ app.use('/media', express.static(dl.DOWNLOADS_DIR, {
       '.avi': 'video/x-msvideo',
       '.mov': 'video/quicktime',
       '.webm': 'video/webm',
+      '.vtt': 'text/vtt; charset=utf-8',
     };
     if (mimeMap[ext]) res.setHeader('Content-Type', mimeMap[ext]);
     // Allow seeking via range requests
@@ -1450,6 +1586,41 @@ async function repairMediaLibrary() {
   }
 }
 
+/** Resolve the on-disk video file for a media item (handles /media + /hls-mkv). */
+function resolveItemFilePath(item: MediaItem): string | null {
+  let rel: string | null = null;
+  if (item.videoUrl.startsWith('/media/')) {
+    rel = item.videoUrl.slice('/media/'.length).split('/').map(decodeURIComponent).join('/');
+  } else if (item.videoUrl.startsWith('/hls-mkv/')) {
+    const q = item.videoUrl.split('?')[1] ?? '';
+    const p = new URLSearchParams(q).get('p');
+    if (p) rel = decodeURIComponent(p);
+  }
+  if (!rel) return null;
+  let abs = path.join(dl.DOWNLOADS_DIR, rel);
+  if (!fs.existsSync(abs)) {
+    const flat = path.join(dl.DOWNLOADS_DIR, path.basename(rel));
+    if (!fs.existsSync(flat)) return null;
+    abs = flat;
+  }
+  return abs;
+}
+
+/**
+ * On startup: backfill WebVTT subtitle sources for media items that have
+ * subtitle streams detected but no served .vtt yet (i.e. downloaded before
+ * subtitle extraction existed). Skips items whose tracks already have a src.
+ */
+async function backfillSubtitles() {
+  for (const item of mediaLibrary) {
+    const needs = item.subtitles.some(s => s.id !== 'off' && !s.src);
+    if (!needs) continue;
+    const file = resolveItemFilePath(item);
+    if (!file) continue;
+    await attachSubtitles(item.id, file, []).catch(e => console.warn('[subs] backfill failed:', e.message));
+  }
+}
+
 // ── Startup (async to wait for DB) ────────────────────────────────────────────
 async function main() {
   // Load downloads from DB (resumes queued, marks interrupted as error)
@@ -1463,8 +1634,11 @@ async function main() {
   const PORT = process.env.PORT || 3001;
   httpServer.listen(PORT, () => {
     console.log(`🎬 Noctiviem backend → http://localhost:${PORT}`);
-    // Fix broken paths / remux legacy MKV items in background (non-blocking)
-    repairMediaLibrary().catch(e => console.error('[repair] fatal:', e.message));
+    // Fix broken paths / remux legacy MKV items in background (non-blocking),
+    // then backfill subtitle tracks for items that don't have them yet.
+    repairMediaLibrary()
+      .then(() => backfillSubtitles())
+      .catch(e => console.error('[repair] fatal:', e.message));
   });
 }
 
