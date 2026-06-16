@@ -14,6 +14,7 @@ export interface Message {
   nickname: string;
   text: string;
   timestamp: number;
+  avatar?: string;
   isWhisper?: boolean;
   whisperTo?: string;
   whisperToId?: string;

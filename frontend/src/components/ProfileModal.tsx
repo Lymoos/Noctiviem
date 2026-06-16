@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { X, Crown, Lock, Clock, Users } from 'lucide-react'
 import { UserProfile } from '../types'
 import { apiFetch, apiPost, apiDelete } from '../store'
+import Avatar from './Avatar'
 
 interface ProfileModalProps {
   userId: string
@@ -61,7 +62,7 @@ export default function ProfileModal({
 
   const avatarUrl = profile
     ? `https://api.dicebear.com/7.x/thumbs/svg?seed=${profile.avatarSeed}&backgroundColor=7c3aed,3b82f6`
-    : `https://api.dicebear.com/7.x/thumbs/svg?seed=${userId}&backgroundColor=0f1115`
+    : undefined
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -72,11 +73,11 @@ export default function ProfileModal({
         {/* Header */}
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-3">
-            <img
+            <Avatar
+              seed={profile?.avatarSeed || userId}
+              name={profile?.nickname ?? participantNickname}
               src={avatarUrl}
-              alt=""
-              className="w-12 h-12 rounded-full"
-              onError={e => { (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/thumbs/svg?seed=${userId}` }}
+              size={48}
             />
             <div>
               {loading ? (
@@ -164,10 +165,11 @@ export default function ProfileModal({
                 <div className="flex flex-wrap gap-2">
                   {profile.friends.slice(0, 10).map(f => (
                     <div key={f.id} className="flex items-center gap-1.5 glass rounded-full px-2.5 py-1">
-                      <img
+                      <Avatar
+                        seed={f.avatarSeed || f.id}
+                        name={f.nickname}
                         src={`https://api.dicebear.com/7.x/thumbs/svg?seed=${f.avatarSeed}&backgroundColor=7c3aed,3b82f6`}
-                        alt=""
-                        className="w-4 h-4 rounded-full"
+                        size={16}
                       />
                       <span className="text-xs text-cinema-muted">{f.nickname}</span>
                     </div>

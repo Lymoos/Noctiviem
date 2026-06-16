@@ -6,6 +6,7 @@ import { translations } from '../i18n'
 import ImportModal from './ImportModal'
 import DownloadsPanel from './DownloadsPanel'
 import UserSearchModal from './UserSearchModal'
+import Avatar from './Avatar'
 
 interface NavbarProps {
   onCreateRoom?: () => void
@@ -115,9 +116,15 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
         <div className="relative flex-shrink-0">
           <button
             onClick={() => setProfileOpen(!profileOpen)}
-            className="w-8 h-8 rounded-full accent-gradient flex items-center justify-center text-white text-xs font-bold hover:opacity-80 transition-opacity"
+            className="rounded-full hover:opacity-80 transition-opacity ring-1 ring-white/10"
+            title={nickname}
           >
-            {nickname.slice(0, 2).toUpperCase()}
+            <Avatar
+              seed={account?.settings.avatarSeed || account?.id || nickname}
+              name={nickname}
+              src={account ? `https://api.dicebear.com/7.x/${account.settings.avatarStyle || 'thumbs'}/svg?seed=${account.settings.avatarSeed || account.id}&backgroundColor=7c3aed,3b82f6` : undefined}
+              size={32}
+            />
           </button>
 
           {profileOpen && (

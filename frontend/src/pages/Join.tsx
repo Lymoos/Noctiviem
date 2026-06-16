@@ -4,6 +4,8 @@ import { Users, Lock, Film, ArrowRight, Edit2, KeyRound, UserCheck } from 'lucid
 import { socket, connectSocket } from '../socket'
 import { useStore } from '../store'
 import { RoomState, MediaItem, User } from '../types'
+import Poster from '../components/Poster'
+import Avatar from '../components/Avatar'
 
 interface RoomPreview {
   id: string
@@ -108,11 +110,12 @@ export default function Join() {
 
           {/* Poster header */}
           <div className="relative h-40 overflow-hidden">
-            <img
+            <Poster
               src={preview.mediaPoster}
-              alt={preview.mediaTitle}
+              title={preview.mediaTitle}
+              seed={preview.id}
+              compact
               className="w-full h-full object-cover"
-              onError={e => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${preview.id}/500/200` }}
             />
             <div className="absolute inset-0 bg-gradient-to-b from-transparent to-cinema-bg/90" />
             <div className="absolute bottom-3 left-4 right-4">
@@ -157,9 +160,7 @@ export default function Join() {
               <>
                 <div className="text-xs text-slate-500 mb-2">Joining as</div>
                 <div className="flex items-center gap-2 glass rounded-lg px-3 py-2 mb-5">
-                  <div className="w-6 h-6 rounded-full accent-gradient flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                    {storedNickname.slice(0, 2).toUpperCase()}
-                  </div>
+                  <Avatar seed={storedNickname} name={storedNickname} size={24} />
                   <span className="text-sm text-cinema-text">{storedNickname}</span>
                 </div>
               </>

@@ -5,6 +5,7 @@ import { User, FloatingReaction } from '../types'
 import { socket } from '../socket'
 import { useStore, selectIsLeader } from '../store'
 import ProfileModal from './ProfileModal'
+import Avatar from './Avatar'
 
 interface CinemaHallProps {
   participants: User[]
@@ -103,28 +104,31 @@ export default function CinemaHall({
         )
       })}
 
-      {/* Seats — perspective effect: back rows narrower + dimmer, front rows wider + brighter */}
-      <div className="flex flex-col items-center overflow-x-hidden w-full" style={{ gap: 0 }}>
+      {/* Seats — uniform depth: back rows slightly smaller + dimmer, no horizontal
+          squish. Seat size is responsive via the --seat CSS var so 8-across always
+          fits without overflow. */}
+      <div
+        className="flex flex-col items-center w-full"
+        style={{ ['--seat' as any]: 'clamp(34px, 6vw, 56px)', gap: 'clamp(8px, 1.6vw, 16px)' }}
+      >
         {Array.from({ length: MAX_ROWS }, (_, rowIdx) => {
-          const t = rowIdx / (MAX_ROWS - 1)           // 0 → 1
-          const perspScale = 0.91 + t * 0.09          // 0.91 → 1.0  (less squish)
-          const opacity    = 0.60 + t * 0.40          // 0.60 → 1.0
-          const marginTop  = rowIdx === 0 ? 0 : 6 + rowIdx * 5
+          const t = MAX_ROWS > 1 ? rowIdx / (MAX_ROWS - 1) : 1  // 0 (back) → 1 (front)
+          const scale   = 0.9 + t * 0.1                          // 0.90 → 1.00
+          const opacity = 0.68 + t * 0.32                        // 0.68 → 1.00
 
           return (
             <div
               key={rowIdx}
-              className="flex items-end justify-center"
+              className="flex items-end justify-center w-full"
               style={{
-                transform: `scaleX(${perspScale})`,
+                transform: `scale(${scale})`,
                 opacity,
-                transformOrigin: 'center center',
-                marginTop,
+                transformOrigin: 'center bottom',
                 transition: 'transform 0.4s ease, opacity 0.4s ease',
-                gap: '10px',
+                gap: 'clamp(4px, 1vw, 12px)',
               }}
             >
-              <span className="text-[10px] text-slate-700 w-3 flex-shrink-0 text-right select-none">
+              <span className="text-[10px] text-slate-700 w-3 flex-shrink-0 text-right select-none hidden sm:block">
                 {rowIdx + 1}
               </span>
 
@@ -142,12 +146,10 @@ export default function CinemaHall({
                   onWhisper={p => p.id !== currentUserId && setWhisperTarget(p)}
                   onKick={handleKick}
                   onProfile={p => setProfileUserId(p.id)}
-                  rowIndex={rowIdx}
-                  perspScale={perspScale}
                 />
               ))}
 
-              <span className="text-[10px] text-slate-700 w-3 flex-shrink-0 select-none">
+              <span className="text-[10px] text-slate-700 w-3 flex-shrink-0 select-none hidden sm:block">
                 {rowIdx + 1}
               </span>
             </div>
@@ -230,13 +232,11 @@ interface SeatItemProps {
   onWhisper: (p: User) => void
   onKick: (userId: string) => void
   onProfile: (p: User) => void
-  rowIndex: number
-  perspScale: number
 }
 
 function SeatItem({
   seatNum, participant, leaderId, currentUserId, isLeader,
-  chatEnabled, bubble, waveActive, onWhisper, onKick, onProfile, rowIndex, perspScale,
+  chatEnabled, bubble, waveActive, onWhisper, onKick, onProfile,
 }: SeatItemProps) {
   const isOccupied = !!participant
   const isThisLeader = participant?.id === leaderId
@@ -246,7 +246,7 @@ function SeatItem({
   const waveDelay = (seatNum - 1) * 50
 
   return (
-    <div className="cinema-seat" style={{ width: 62 }}>
+    <div className="cinema-seat">
       {/* Chat bubble */}
       {bubble && chatEnabled && (
         <div className="chat-bubble animate-bubble-in">
@@ -262,12 +262,14 @@ function SeatItem({
       {/* Avatar above seat */}
       {participant && (
         <div
-          className={`relative mb-1 cursor-pointer ${
+          className={`relative mb-1 cursor-pointer rounded-full transition-transform hover:scale-105 ${
             participant.specialRole === 'miloe-solnyshko'
-              ? 'ring-2 ring-rose-400/60 rounded-full'
-              : isCurrentUser ? 'ring-2 ring-purple-500 rounded-full' : ''
+              ? 'ring-2 ring-rose-400/60'
+              : isCurrentUser ? 'ring-2 ring-purple-500'
+              : isThisLeader ? 'ring-2 ring-yellow-400/50' : ''
           }`}
           onClick={() => onProfile(participant)}
+          title={participant.nickname}
         >
           {participant.specialRole === 'miloe-solnyshko' && (
             <div className="sparkle-cluster" aria-hidden="true">
@@ -276,17 +278,11 @@ function SeatItem({
               <span className="sparkle-item sparkle-3">🌸</span>
             </div>
           )}
-          <img
+          <Avatar
+            seed={participant.id}
+            name={participant.nickname}
             src={participant.avatar}
-            alt={participant.nickname}
-            className="w-11 h-11 rounded-full"
-            style={{
-              filter: isCurrentUser ? 'none' : 'brightness(0.9)',
-              transform: `scaleX(${1 / perspScale})`,
-            }}
-            onError={e => {
-              (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/thumbs/svg?seed=${participant.id}`
-            }}
+            size="calc(var(--seat) * 0.82)"
           />
         </div>
       )}

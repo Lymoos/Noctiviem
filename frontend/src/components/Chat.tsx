@@ -3,6 +3,7 @@ import { Send, X, MessageSquare, Trash2 } from 'lucide-react'
 import { Message } from '../types'
 import { socket } from '../socket'
 import { useStore, selectIsLeader } from '../store'
+import Avatar from './Avatar'
 
 interface ChatProps {
   messages: Message[]
@@ -93,14 +94,9 @@ export default function Chat({ messages, currentUserId, chatEnabled, onClose }: 
           return (
             <div key={msg.id} className={`group flex items-start gap-2 ${isOwn ? 'flex-row-reverse' : ''}`}>
               {/* Avatar */}
-              <img
-                src={`https://api.dicebear.com/7.x/thumbs/svg?seed=${msg.userId}&backgroundColor=0f1115`}
-                alt={msg.nickname}
-                className="w-6 h-6 rounded-full flex-shrink-0 mt-0.5"
-                onError={e => {
-                  (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${msg.userId}/24/24`
-                }}
-              />
+              <div className="mt-0.5">
+                <Avatar seed={msg.userId} name={msg.nickname} src={msg.avatar} size={26} />
+              </div>
 
               <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} flex-1 min-w-0`}>
                 {/* Name + time */}

@@ -6,6 +6,7 @@ import MediaCard from '../components/MediaCard'
 import DownloadingCard from '../components/DownloadingCard'
 import RoomCard from '../components/RoomCard'
 import CreateRoomModal from '../components/CreateRoomModal'
+import Poster from '../components/Poster'
 import { useStore, apiFetch, apiDelete, apiPost } from '../store'
 import { translations } from '../i18n'
 import { socket, connectSocket } from '../socket'
@@ -236,11 +237,12 @@ export default function Dashboard() {
                   className="glass-strong rounded-xl overflow-hidden border border-white/5 hover:border-purple-500/20 transition-all group"
                 >
                   <div className="relative h-20 overflow-hidden">
-                    <img
+                    <Poster
                       src={session.mediaPoster}
-                      alt={session.mediaTitle}
+                      title={session.mediaTitle}
+                      seed={session.id}
+                      compact
                       className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity"
-                      onError={e => { (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${session.id}/400/200` }}
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-cinema-bg/90 to-transparent" />
                     <div className="absolute bottom-2 left-3 right-3 flex items-center justify-between">

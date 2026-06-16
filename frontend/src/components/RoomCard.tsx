@@ -1,5 +1,6 @@
 import { Users, Play, Clock, Lock, Crown } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import Poster from './Poster'
 
 interface RoomCardProps {
   id: string
@@ -28,14 +29,7 @@ export default function RoomCard({
       <div className="flex gap-0">
         {/* Poster */}
         <div className="w-20 h-28 flex-shrink-0 relative overflow-hidden">
-          <img
-            src={mediaPoster}
-            alt={mediaTitle}
-            className="w-full h-full object-cover"
-            onError={e => {
-              (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${id}/160/224`
-            }}
-          />
+          <Poster src={mediaPoster} title={mediaTitle} seed={id} className="w-full h-full object-cover" compact />
           {isPlaying && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/40">
               <div className="w-6 h-6 rounded-full bg-purple-600/80 flex items-center justify-center">

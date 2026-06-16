@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { X, Search, UserPlus, UserMinus, Loader } from 'lucide-react'
 import { useStore, apiFetch, apiPost, apiDelete } from '../store'
 import { translations } from '../i18n'
+import Avatar from './Avatar'
 
 interface SearchUser {
   id: string
@@ -99,11 +100,11 @@ export default function UserSearchModal({ onClose }: UserSearchModalProps) {
                 key={user.id}
                 className="flex items-center gap-3 p-3 glass rounded-lg border border-white/5"
               >
-                <img
-                  src={`https://api.dicebear.com/7.x/${style}/svg?seed=${user.avatarSeed || user.id}&backgroundColor=0f1115`}
-                  alt={user.nickname}
-                  className="w-9 h-9 rounded-full flex-shrink-0"
-                  onError={e => { (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/thumbs/svg?seed=${user.id}` }}
+                <Avatar
+                  seed={user.avatarSeed || user.id}
+                  name={user.nickname}
+                  src={`https://api.dicebear.com/7.x/${style}/svg?seed=${user.avatarSeed || user.id}&backgroundColor=7c3aed,3b82f6`}
+                  size={36}
                 />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-cinema-text truncate">{user.nickname}</div>

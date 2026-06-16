@@ -416,12 +416,22 @@ const TMDB_GENRES: Record<number, string> = {
 };
 
 /** Extract a clean title and optional year from a raw torrent filename. */
+// Common scene-release tokens that follow the title — used to trim noise so
+// TMDB search hits the real movie even when there's no year in the name.
+const RELEASE_TOKENS = /\b(1080p|2160p|720p|480p|4k|uhd|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|web|hdrip|dvdrip|hdtv|x264|x265|h\.?264|h\.?265|hevc|avc|aac|ac3|eac3|dts|dd[p]?5\.?1|atmos|remux|proper|repack|hdr|hdr10|dv|10bit|imax|amzn|nf)\b/i;
+
 function parseTitleAndYear(filename: string): { title: string; year?: number } {
-  const base = filename.replace(/\.[^.]+$/, ''); // strip extension
-  const yearMatch = base.match(/\b(19[5-9]\d|20[012]\d)\b/);
+  let base = filename.replace(/\.[^.]+$/, '');     // strip extension
+  base = base.replace(/[._]+/g, ' ');              // dots/underscores → spaces
+  const yearMatch = base.match(/\b(19[5-9]\d|20[0-3]\d)\b/);
   const year = yearMatch ? parseInt(yearMatch[0]) : undefined;
-  const titlePart = yearMatch ? base.slice(0, yearMatch.index) : base;
-  const title = titlePart.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+  let titlePart = yearMatch ? base.slice(0, yearMatch.index) : base;
+  // No year? Cut at the first release token (resolution/source/codec/…).
+  if (!yearMatch) {
+    const tok = titlePart.match(RELEASE_TOKENS);
+    if (tok && (tok.index ?? 0) > 0) titlePart = titlePart.slice(0, tok.index);
+  }
+  const title = titlePart.replace(/[\[\]()]/g, ' ').replace(/\s+/g, ' ').trim();
   return { title, year };
 }
 
@@ -1367,7 +1377,8 @@ io.on('connection', socket => {
     const rid = socket.data.roomId; if (!rid) return;
     const room = rm.getRoomById(rid); if (!room) return;
     if (!room.chatEnabled && room.leaderId !== socket.data.userId) return;
-    const msg = rm.addMessage(rid, { userId: socket.data.userId, nickname: socket.data.nickname, text: d.text.substring(0, 500).trim() });
+    const sender = room.participants.find(p => p.id === socket.data.userId);
+    const msg = rm.addMessage(rid, { userId: socket.data.userId, nickname: socket.data.nickname, text: d.text.substring(0, 500).trim(), avatar: sender?.avatar });
     if (msg) { io.to(rid).emit('room:message', msg); cb?.({ success: true }); }
   });
 
@@ -1375,7 +1386,8 @@ io.on('connection', socket => {
     const rid = socket.data.roomId; if (!rid) return;
     const room = rm.getRoomById(rid); if (!room) return;
     const target = room.participants.find(p => p.id === d.targetUserId); if (!target) return;
-    const msg = rm.addMessage(rid, { userId: socket.data.userId, nickname: socket.data.nickname, text: d.text.substring(0, 500).trim(), isWhisper: true, whisperTo: target.nickname, whisperToId: d.targetUserId });
+    const sender = room.participants.find(p => p.id === socket.data.userId);
+    const msg = rm.addMessage(rid, { userId: socket.data.userId, nickname: socket.data.nickname, text: d.text.substring(0, 500).trim(), avatar: sender?.avatar, isWhisper: true, whisperTo: target.nickname, whisperToId: d.targetUserId });
     if (msg) { socket.emit('room:message', msg); io.sockets.sockets.get(target.socketId)?.emit('room:message', msg); }
   });
 

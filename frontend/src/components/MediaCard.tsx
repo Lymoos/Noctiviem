@@ -2,6 +2,7 @@ import { Play, Clapperboard, Headphones, Subtitles, Wifi, Clock, X, RefreshCw } 
 import { MediaItem } from '../types'
 import { useStore } from '../store'
 import { translations } from '../i18n'
+import Poster from './Poster'
 
 interface MediaCardProps {
   item: MediaItem
@@ -28,15 +29,7 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDel
     <div className="media-card group">
       {/* Poster */}
       <div className="relative aspect-[2/3] bg-cinema-card overflow-hidden rounded-xl">
-        <img
-          src={item.poster}
-          alt={item.title}
-          className="w-full h-full object-cover"
-          loading="lazy"
-          onError={e => {
-            (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${item.id}/400/600`
-          }}
-        />
+        <Poster src={item.poster} title={item.title} seed={item.id} className="w-full h-full object-cover" />
 
         {/* Processing overlay */}
         {item.status === 'processing' && (
