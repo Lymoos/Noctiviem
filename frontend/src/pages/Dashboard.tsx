@@ -33,7 +33,7 @@ function StorageStat({ bytes }: { bytes: number | null }) {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { setMediaLibrary, updateMediaProgress, mediaLibrary, downloads, setRoom, setCurrentUser, nickname, toggleDownloads, lang } = useStore()
+  const { setMediaLibrary, updateMediaProgress, mediaLibrary, downloads, setRoom, setCurrentUser, nickname, toggleDownloads, lang, progress, setProgress } = useStore()
   const t = translations[lang]
   const [loading, setLoading] = useState(true)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -60,6 +60,18 @@ export default function Dashboard() {
       .then(s => { if (!s.error) setStorageBytes(s.totalBytes) })
       .catch(() => {})
   }, [mediaLibrary.length, downloads.length])
+
+  // "Continue watching" positions for the library
+  useEffect(() => {
+    apiFetch<{ progress: { mediaId: string; position: number; duration: number }[] }>('/api/progress')
+      .then(r => {
+        if (!Array.isArray(r.progress)) return
+        const map: Record<string, { position: number; duration: number }> = {}
+        for (const p of r.progress) map[p.mediaId] = { position: p.position, duration: p.duration }
+        setProgress(map)
+      })
+      .catch(() => {})
+  }, [setProgress])
 
   // Active sessions browser — refresh every 10s
   useEffect(() => {
@@ -95,7 +107,9 @@ export default function Dashboard() {
     setCreateError(null)
 
     const emit = () => {
-      socket.emit('room:create', data, (res: { room: RoomState; media: MediaItem; userId: string; error?: string }) => {
+      // Resume from the creator's saved position (Continue watching)
+      const startAt = useStore.getState().progress[data.mediaId]?.position ?? 0
+      socket.emit('room:create', { ...data, startAt }, (res: { room: RoomState; media: MediaItem; userId: string; error?: string }) => {
         if (res.error) {
           setCreateError(res.error)
           return
@@ -330,6 +344,7 @@ export default function Dashboard() {
                 <MediaCard
                   key={item.id}
                   item={item}
+                  resume={progress[item.id]}
                   onWatch={() => handleOpenCreate(item.id)}
                   onCreateRoom={() => handleOpenCreate(item.id)}
                   onDelete={() => handleDeleteMedia(item.id)}

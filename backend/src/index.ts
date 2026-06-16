@@ -1008,6 +1008,38 @@ app.post('/api/media/:id/redownload', requireAuth, async (req, res) => {
   res.json({ success: true, downloadId: newDownload.id });
 });
 
+// ── Watch progress (continue watching / resume) ───────────────────────────────
+// Each logged-in user gets a saved position per media item.
+app.post('/api/media/:id/progress', requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const position = Number(req.body?.position);
+  const duration = Number(req.body?.duration) || 0;
+  if (!Number.isFinite(position) || position < 0) { res.status(400).json({ error: 'Invalid position' }); return; }
+  await db.watchProgress.upsert({
+    where:  { userId_mediaId: { userId, mediaId: req.params.id } },
+    update: { position, duration },
+    create: { userId, mediaId: req.params.id, position, duration },
+  }).catch((e: Error) => console.warn('[progress] save failed:', e.message));
+  res.json({ success: true });
+});
+
+// The caller's saved positions for the whole library (used for "Continue").
+app.get('/api/progress', requireAuth, async (req, res) => {
+  const userId = (req as any).userId as string;
+  const rows = await db.watchProgress.findMany({
+    where: { userId },
+    orderBy: { updatedAt: 'desc' },
+  }).catch(() => []);
+  res.json({
+    progress: rows.map(r => ({
+      mediaId: r.mediaId,
+      position: r.position,
+      duration: r.duration,
+      updatedAt: r.updatedAt.getTime(),
+    })),
+  });
+});
+
 // ── Download routes ───────────────────────────────────────────────────────────
 app.get('/api/downloads', requireAuth, (_req, res) => { res.json(dl.list()); });
 
@@ -1286,7 +1318,7 @@ io.on('connection', socket => {
 
   console.log(`[+] ${nickname} (${socket.id})`);
 
-  socket.on('room:create', async (data: { name: string; mediaId: string; maxParticipants?: number; password?: string; friendsOnly?: boolean }, cb) => {
+  socket.on('room:create', async (data: { name: string; mediaId: string; maxParticipants?: number; password?: string; friendsOnly?: boolean; startAt?: number }, cb) => {
     const media = mediaLibrary.find(m => m.id === data.mediaId);
     if (!media) { cb({ error: 'Media not found' }); return; }
     if (media.status !== 'ready') { cb({ error: 'Media is not ready' }); return; }
@@ -1303,6 +1335,11 @@ io.on('connection', socket => {
       seatColor = dbUser?.seatColor ?? 'default';
     } catch {}
     const room = rm.createRoom(data.name.trim() || 'Movie Night', media.id, media.title, media.poster, media.duration, data.maxParticipants || 24, socket.data.userId, socket.id, socket.data.nickname, specialRole, avatarStyle, avatarSeed, seatColor, data.password || null, data.friendsOnly ?? false);
+    // Resume from a saved position (Continue watching) — clamp away from the very end.
+    const startAt = Number(data.startAt) || 0;
+    if (startAt > 0 && (!media.duration || startAt < media.duration - 5)) {
+      rm.updateRoomPlayback(room.id, { currentTime: startAt });
+    }
     socket.data.roomId = room.id;
     socket.join(room.id);
     cb({ room, media, userId: socket.data.userId });

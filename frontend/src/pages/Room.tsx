@@ -10,7 +10,7 @@ import CinemaHall from '../components/CinemaHall'
 import Chat from '../components/Chat'
 import LeaderPanel from '../components/LeaderPanel'
 import Avatar from '../components/Avatar'
-import { useStore, selectIsLeader } from '../store'
+import { useStore, selectIsLeader, apiPost } from '../store'
 import { socket, connectSocket, getLocalUserId } from '../socket'
 import { RoomState, MediaItem, Message, Reaction, User, FloatingReaction } from '../types'
 import { SkipForward } from 'lucide-react'
@@ -26,6 +26,7 @@ export default function Room() {
     updateRoomSync, updateRoomSettings, updateParticipants, addParticipant,
     addMessage, deleteMessage, addReaction, changeRoomMedia,
     chatOpen, toggleChat, leaderPanelOpen, toggleLeaderPanel,
+    isAuthenticated, setMediaWatchPosition,
   } = useStore()
 
   const isLeader = useStore(selectIsLeader)
@@ -40,6 +41,12 @@ export default function Room() {
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([])
   const bubbleTimers = useRef<{ [userId: string]: ReturnType<typeof setTimeout> }>({})
   const [currentVideoTime, setCurrentVideoTime] = useState(0)
+  const timeRef = useRef(0)
+
+  const handleTimeUpdate = useCallback((tSec: number) => {
+    timeRef.current = tSec
+    setCurrentVideoTime(tSec)
+  }, [])
 
   // Join room via socket
   useEffect(() => {
@@ -195,6 +202,22 @@ export default function Room() {
       clearRoom()
     }
   }, [clearRoom])
+
+  // Persist "continue watching" position for logged-in users (every 15s + on leave)
+  useEffect(() => {
+    if (!isAuthenticated || !media) return
+    const mediaId = media.id
+    const duration = media.duration
+    const save = () => {
+      const pos = timeRef.current
+      if (pos > 5) {
+        apiPost(`/api/media/${mediaId}/progress`, { position: pos, duration }).catch(() => {})
+        setMediaWatchPosition(mediaId, pos, duration)
+      }
+    }
+    const iv = setInterval(save, 15000)
+    return () => { save(); clearInterval(iv) }
+  }, [isAuthenticated, media, setMediaWatchPosition])
 
   const showBubble = useCallback((uid: string, text: string) => {
     if (bubbleTimers.current[uid]) clearTimeout(bubbleTimers.current[uid])
@@ -388,7 +411,7 @@ export default function Room() {
                 media={media}
                 serverTime={room.currentTime}
                 isPlaying={room.isPlaying}
-                onTimeUpdate={setCurrentVideoTime}
+                onTimeUpdate={handleTimeUpdate}
                 onEnded={() => {}}
               />
             </div>
@@ -448,7 +471,7 @@ export default function Room() {
                   media={media}
                   serverTime={room.currentTime}
                   isPlaying={room.isPlaying}
-                  onTimeUpdate={setCurrentVideoTime}
+                  onTimeUpdate={handleTimeUpdate}
                   onEnded={() => {}}
                 />
               </div>

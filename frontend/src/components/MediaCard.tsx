@@ -6,6 +6,7 @@ import Poster from './Poster'
 
 interface MediaCardProps {
   item: MediaItem
+  resume?: { position: number; duration: number }
   onWatch?: () => void
   onCreateRoom?: () => void
   onManage?: () => void
@@ -20,10 +21,13 @@ function formatDuration(seconds: number): string {
   return `${m}m`
 }
 
-export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDelete, onRedownload }: MediaCardProps) {
+export default function MediaCard({ item, resume, onWatch, onCreateRoom, onManage, onDelete, onRedownload }: MediaCardProps) {
   const { lang } = useStore()
   const t = translations[lang]
   const isReady = item.status === 'ready'
+
+  const resumePct = resume && resume.duration > 0 ? Math.min(100, (resume.position / resume.duration) * 100) : 0
+  const showResume = !!resume && resume.position > 5 && resumePct < 98 && (resume.duration === 0 || resume.position < resume.duration - 5)
 
   return (
     <div className="media-card group">
@@ -126,7 +130,7 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDel
                 className="flex items-center gap-2 text-xs font-medium text-white bg-white/10 hover:bg-white/20 rounded-lg px-3 py-2 transition-colors w-full"
               >
                 <Play size={12} fill="currentColor" />
-                {t.watch}
+                {showResume ? (lang === 'ru' ? 'Продолжить' : 'Continue') : t.watch}
               </button>
               <button
                 onClick={e => { e.stopPropagation(); onCreateRoom?.() }}
@@ -136,6 +140,13 @@ export default function MediaCard({ item, onWatch, onCreateRoom, onManage, onDel
                 {t.createHall}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Continue-watching progress bar */}
+        {showResume && (
+          <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50 z-10">
+            <div className="h-full bg-purple-500" style={{ width: `${resumePct}%` }} />
           </div>
         )}
       </div>

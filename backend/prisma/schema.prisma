@@ -98,3 +98,16 @@ model Download {
 
   @@map("downloads")
 }
+
+model WatchProgress {
+  id        String   @id @default(uuid())
+  userId    String
+  mediaId   String
+  position  Float    @default(0)   // seconds into the media
+  duration  Float    @default(0)   // total seconds (for % watched)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, mediaId])
+  @@index([userId])
+  @@map("watch_progress")
+}

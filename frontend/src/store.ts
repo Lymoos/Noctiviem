@@ -73,6 +73,11 @@ interface AppStore {
   setMediaLibrary: (items: MediaItem[]) => void;
   updateMediaProgress: (id: string, pct: number) => void;
 
+  // Per-user "continue watching" positions, keyed by media id.
+  progress: Record<string, { position: number; duration: number }>;
+  setProgress: (p: Record<string, { position: number; duration: number }>) => void;
+  setMediaWatchPosition: (mediaId: string, position: number, duration: number) => void;
+
   downloads: DownloadItem[];
   setDownloads: (items: DownloadItem[]) => void;
   downloadsOpen: boolean;
@@ -149,6 +154,12 @@ export const useStore = create<AppStore>((set) => ({
   setMediaLibrary: (items) => set({ mediaLibrary: items }),
   updateMediaProgress: (id, pct) => set(s => ({
     mediaLibrary: s.mediaLibrary.map(m => m.id === id ? { ...m, progress: pct } : m),
+  })),
+
+  progress: {},
+  setProgress: (p) => set({ progress: p }),
+  setMediaWatchPosition: (mediaId, position, duration) => set(s => ({
+    progress: { ...s.progress, [mediaId]: { position, duration } },
   })),
 
   downloads: [],
