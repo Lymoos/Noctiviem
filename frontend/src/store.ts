@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { RoomState, User, Message, Reaction, MediaItem, Account, DownloadItem } from './types';
 import { Lang } from './i18n';
 import { randomUUID } from './utils';
+import { updateSocketAuth } from './socket';
 
 // ── Token helpers ────────────────────────────────────────────────────────────
 const TOKEN_KEY = 'noctiviem_token';
@@ -111,21 +112,26 @@ export const useStore = create<AppStore>((set) => ({
     // Sync socket userId to the authenticated user's DB ID so profile lookups work
     localStorage.setItem(USERID_KEY, account.id);
     set({ account, isAuthenticated: true, nickname: account.settings.nickname, userId: account.id });
+    // Push the new identity/token into the live socket (otherwise it stays a guest)
+    updateSocketAuth();
   },
 
   updateAccount: (account) => {
     localStorage.setItem(NICK_KEY, account.settings.nickname);
     set({ account, nickname: account.settings.nickname });
+    updateSocketAuth();
   },
 
   logout: () => {
     clearToken();
     set({ account: null, isAuthenticated: false });
+    updateSocketAuth();
   },
 
   setNickname: (n) => {
     localStorage.setItem(NICK_KEY, n);
     set({ nickname: n });
+    updateSocketAuth();
   },
 
   lang: detectLang(),
