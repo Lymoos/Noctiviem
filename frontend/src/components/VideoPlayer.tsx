@@ -110,18 +110,28 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
     }
   }, [hlsSrc, isHls, media.videoUrl])
 
-  // Sync video with server state
+  // Sync with server: hard-seek on big drift, gently nudge playbackRate on small
+  // drift so viewers glide back into sync without a jarring jump. The Leader is
+  // the source of truth and always plays at 1x.
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
 
-    const diff = Math.abs(video.currentTime - serverTime)
-    if (diff > 1.5) {
+    if (isLeader) { video.playbackRate = 1; return }
+
+    const diff = video.currentTime - serverTime  // positive = ahead of the Leader
+    const adiff = Math.abs(diff)
+    if (adiff > 1.5) {
       video.currentTime = serverTime
+      video.playbackRate = 1
       setIsSyncing(true)
-      setTimeout(() => setIsSyncing(false), 1500)
+      setTimeout(() => setIsSyncing(false), 1200)
+    } else if (adiff > 0.4) {
+      video.playbackRate = diff > 0 ? 0.95 : 1.05  // ahead → slow down, behind → catch up
+    } else {
+      video.playbackRate = 1
     }
-  }, [serverTime])
+  }, [serverTime, isLeader])
 
   // Play/Pause sync
   useEffect(() => {
