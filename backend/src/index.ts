@@ -523,6 +523,27 @@ async function fetchTmdbMetadata(rawFilename: string): Promise<TmdbMeta | null> 
   return en ?? ru;
 }
 
+interface DiscoverResult { id: number; title: string; year: number; poster: string; overview: string }
+
+/** Free-text TMDB movie search for the discover/download screen. */
+async function tmdbSearch(query: string): Promise<DiscoverResult[]> {
+  const apiKey = process.env.TMDB_API_KEY;
+  if (!apiKey || query.trim().length < 2) return [];
+  try {
+    const params = new URLSearchParams({ api_key: apiKey, query: query.trim(), language: 'ru-RU', include_adult: 'false' });
+    const res = await fetch(`https://api.themoviedb.org/3/search/movie?${params}`, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return [];
+    const data = await res.json() as { results?: any[] };
+    return (data.results ?? []).slice(0, 18).map((m: any) => ({
+      id: m.id,
+      title: m.title || m.original_title || '',
+      year: m.release_date ? parseInt(m.release_date.slice(0, 4)) : 0,
+      poster: m.poster_path ? `https://image.tmdb.org/t/p/w342${m.poster_path}` : '',
+      overview: m.overview || '',
+    }));
+  } catch { return []; }
+}
+
 /** Run ffprobe on a video file and extract duration, audio streams, subtitle streams. */
 async function probeVideoFile(filePath: string): Promise<{
   duration: number;
@@ -702,6 +723,7 @@ async function attachSubtitles(mediaId: string, filePath: string, externalSubFil
 import * as rm from './roomManager';
 import * as auth from './auth';
 import * as dl from './downloads';
+import * as indexer from './indexer';
 import { MediaItem, Series } from './types';
 
 const app = express();
@@ -1194,6 +1216,60 @@ app.patch('/api/downloads/reorder', requireAuth, (req, res) => {
   if (!Array.isArray(ids)) { res.status(400).json({ error: 'ids array required' }); return; }
   dl.reorder(ids as string[]);
   res.json({ success: true });
+});
+
+// ── Discover (TMDb showcase) + RuTracker indexer + magnet downloads ───────────
+app.get('/api/discover/config', requireAuth, (_req, res) => {
+  res.json({ tracker: indexer.isConfigured(), tmdb: !!process.env.TMDB_API_KEY });
+});
+
+app.get('/api/discover/search', requireAuth, async (req, res) => {
+  const q = ((req.query.q as string) || '').trim();
+  if (q.length < 2) { res.json({ results: [] }); return; }
+  res.json({ results: await tmdbSearch(q) });
+});
+
+app.get('/api/tracker/search', requireAuth, async (req, res) => {
+  if (!indexer.isConfigured()) { res.status(503).json({ error: 'RuTracker не настроен (RUTRACKER_USERNAME / RUTRACKER_PASSWORD)' }); return; }
+  const q = ((req.query.q as string) || '').trim();
+  if (q.length < 2) { res.json({ results: [] }); return; }
+  const year = req.query.year ? parseInt(req.query.year as string) || undefined : undefined;
+  const quality = (req.query.quality as string) || '1080p';
+  try {
+    const results = await indexer.searchTracker({ query: q, year, targetQuality: quality });
+    res.json({ results });
+  } catch (e: any) {
+    console.error('[tracker] search failed:', e.message);
+    res.status(502).json({ error: e.message || 'Поиск на трекере не удался' });
+  }
+});
+
+// Download a release picked on the tracker (resolves magnet on demand).
+app.post('/api/downloads/tracker', requireAuth, async (req, res) => {
+  const { trackerId, displayName } = req.body as { trackerId?: string; displayName?: string };
+  if (!trackerId) { res.status(400).json({ error: 'trackerId required' }); return; }
+  if (!indexer.isConfigured()) { res.status(503).json({ error: 'RuTracker не настроен' }); return; }
+  try {
+    const magnet = await indexer.getMagnet(String(trackerId));
+    if (!magnet) { res.status(404).json({ error: 'Magnet не найден' }); return; }
+    const item = await dl.addMagnet(magnet, displayName || 'RuTracker');
+    res.json(item);
+  } catch (e: any) {
+    console.error('[tracker] download failed:', e.message);
+    res.status(502).json({ error: e.message || 'Не удалось начать загрузку' });
+  }
+});
+
+// Manual magnet paste.
+app.post('/api/downloads/magnet', requireAuth, async (req, res) => {
+  const { magnet, displayName } = req.body as { magnet?: string; displayName?: string };
+  if (!magnet || !/^magnet:\?/i.test(magnet.trim())) { res.status(400).json({ error: 'Нужна корректная magnet-ссылка' }); return; }
+  try {
+    const item = await dl.addMagnet(magnet.trim(), displayName || 'Magnet');
+    res.json(item);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || 'Не удалось добавить magnet' });
+  }
 });
 
 // ── Storage stats ─────────────────────────────────────────────────────────────

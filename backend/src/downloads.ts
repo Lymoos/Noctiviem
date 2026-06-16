@@ -247,6 +247,17 @@ export async function add(torrentFilePath: string, displayName: string): Promise
   return item;
 }
 
+/**
+ * Queue a download from a magnet URI (e.g. resolved from an indexer/RuTracker).
+ * WebTorrent's client.add() accepts a magnet directly, so the rest of the
+ * pipeline (metadata → file list → progress → completion) is identical to a
+ * .torrent file. The magnet string is stored in `torrentPath`; remove() skips
+ * the file-unlink since it isn't an on-disk path.
+ */
+export async function addMagnet(magnetUri: string, displayName: string): Promise<DownloadItem> {
+  return add(magnetUri, displayName);
+}
+
 export async function remove(id: string, deleteFiles = false): Promise<boolean> {
   const item = downloads.get(id);
   if (!item) return false;

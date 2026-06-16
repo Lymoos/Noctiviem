@@ -29,6 +29,10 @@ services:
       DOWNLOADS_DIR: /data/downloads
       UPLOADS_DIR: /data/uploads
       TMDB_API_KEY: ${TMDB_API_KEY:-d21471b69050d255ea5f5db1610ddf90}
+      # RuTracker credentials for in-app movie discovery / auto-download (optional).
+      # The backend must be able to reach rutracker.org (proxy/mirror if blocked).
+      RUTRACKER_USERNAME: ${RUTRACKER_USERNAME:-}
+      RUTRACKER_PASSWORD: ${RUTRACKER_PASSWORD:-}
     volumes:
       - downloads_data:/data/downloads
       - uploads_data:/data/uploads

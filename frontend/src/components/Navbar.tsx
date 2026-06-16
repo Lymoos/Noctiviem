@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Search, Plus, Download, Upload, Settings, LogOut, Film, Shield, UserSearch } from 'lucide-react'
+import { Search, Plus, Download, Upload, Settings, LogOut, Film, Shield, UserSearch, Compass } from 'lucide-react'
 import { useStore } from '../store'
 import { translations } from '../i18n'
 import ImportModal from './ImportModal'
 import DownloadsPanel from './DownloadsPanel'
 import UserSearchModal from './UserSearchModal'
+import DiscoverModal from './DiscoverModal'
 import Avatar from './Avatar'
 
 interface NavbarProps {
@@ -20,6 +21,7 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
   const t = translations[lang]
   const [profileOpen, setProfileOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [discoverOpen, setDiscoverOpen] = useState(false)
   const [friendSearchOpen, setFriendSearchOpen] = useState(false)
 
   const activeDownloads = downloads.filter(
@@ -77,6 +79,16 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
             <span className="hidden sm:inline">{t.findFriends}</span>
           </button>
         )}
+
+        {/* Discover / find movies */}
+        <button
+          onClick={() => setDiscoverOpen(true)}
+          className="btn-ghost text-sm flex items-center gap-2"
+          title="Найти и скачать фильм"
+        >
+          <Compass size={14} />
+          <span className="hidden sm:inline">Найти</span>
+        </button>
 
         {/* Import */}
         <button
@@ -169,6 +181,7 @@ export default function Navbar({ onCreateRoom, searchQuery = '', onSearchChange 
       </nav>
 
       {importOpen && <ImportModal onClose={() => setImportOpen(false)} />}
+      {discoverOpen && <DiscoverModal onClose={() => setDiscoverOpen(false)} />}
       {downloadsOpen && <DownloadsPanel />}
       {friendSearchOpen && <UserSearchModal onClose={() => setFriendSearchOpen(false)} />}
     </>
