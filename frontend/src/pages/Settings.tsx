@@ -4,6 +4,10 @@ import { User, Sliders, Download, Trash2, LogOut, Save, Eye, EyeOff, Film, Chevr
 import { useStore, apiPatch, apiDelete } from '../store'
 import { translations } from '../i18n'
 import { randomUUID } from '../utils'
+import Avatar from '../components/Avatar'
+
+const dicebear = (style: string, seed: string) =>
+  `https://api.dicebear.com/7.x/${style}/svg?seed=${seed}&backgroundColor=7c3aed,3b82f6`
 
 type Tab = 'profile' | 'playback' | 'downloads' | 'account'
 
@@ -234,6 +238,23 @@ export default function Settings() {
         {/* ── PROFILE TAB ── */}
         {tab === 'profile' && (
           <form onSubmit={saveProfile} className="glass-strong rounded-2xl p-6 space-y-5" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
+            {/* Live avatar preview */}
+            <div className="flex items-center gap-4">
+              <Avatar
+                seed={avatarSeed || account?.id || 'preview'}
+                name={nickname || account?.username}
+                src={dicebear(avatarStyle, avatarSeed || account?.id || 'preview')}
+                size={64}
+                className="ring-2 ring-white/10"
+              />
+              <div className="min-w-0">
+                <div className="text-base font-semibold text-cinema-text truncate">{nickname || account?.username}</div>
+                <div className="text-xs text-cinema-muted">@{account?.username}</div>
+              </div>
+            </div>
+
+            <hr className="border-white/5" />
+
             <div>
               <label className="block text-xs text-slate-500 uppercase tracking-wide mb-1.5">{t.displayName}</label>
               <input
@@ -321,11 +342,11 @@ export default function Settings() {
                         : 'border-white/5 bg-white/3 hover:bg-white/6'
                     }`}
                   >
-                    <img
-                      src={`https://api.dicebear.com/7.x/${style}/svg?seed=${avatarSeed || account?.id || 'preview'}`}
-                      alt={style}
-                      className="w-10 h-10 rounded-full"
-                      onError={e => { (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/thumbs/svg?seed=preview` }}
+                    <Avatar
+                      seed={`${style}-${avatarSeed || account?.id || 'preview'}`}
+                      name={nickname || account?.username}
+                      src={dicebear(style, avatarSeed || account?.id || 'preview')}
+                      size={40}
                     />
                     <span className="text-[10px] text-cinema-muted capitalize">{style.replace('-', ' ')}</span>
                   </button>
@@ -455,9 +476,12 @@ export default function Settings() {
           <div className="space-y-4">
             <div className="glass-strong rounded-2xl p-6" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-full accent-gradient flex items-center justify-center text-white font-bold">
-                  {(account?.settings.nickname ?? 'U').slice(0, 2).toUpperCase()}
-                </div>
+                <Avatar
+                  seed={account?.settings.avatarSeed || account?.id || 'u'}
+                  name={account?.settings.nickname}
+                  src={account ? dicebear(account.settings.avatarStyle || 'thumbs', account.settings.avatarSeed || account.id) : undefined}
+                  size={48}
+                />
                 <div>
                   <div className="text-sm font-medium text-cinema-text">{account?.settings.nickname}</div>
                   <div className="text-xs text-cinema-muted">{account?.email}</div>
