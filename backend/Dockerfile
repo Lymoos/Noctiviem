@@ -2,6 +2,14 @@
 FROM node:20 AS builder
 WORKDIR /app
 
+# webtorrent pulls in node-datachannel (WebRTC), which normally installs a
+# prebuilt binary. If that download is unavailable/slow it falls back to
+# compiling from source via cmake-js — which needs CMake (+ OpenSSL headers).
+# Install them so `npm ci` doesn't fail on flaky prebuild fetches.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      cmake pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy workspace manifests and install all deps
 COPY package.json package-lock.json ./
 COPY backend/package.json ./backend/
