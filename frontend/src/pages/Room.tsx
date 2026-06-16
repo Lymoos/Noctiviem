@@ -412,7 +412,7 @@ export default function Room() {
                 serverTime={room.currentTime}
                 isPlaying={room.isPlaying}
                 onTimeUpdate={handleTimeUpdate}
-                onEnded={() => {}}
+                onEnded={() => { if (isLeader) socket.emit('room:next_episode') }}
               />
             </div>
 
@@ -472,7 +472,7 @@ export default function Room() {
                   serverTime={room.currentTime}
                   isPlaying={room.isPlaying}
                   onTimeUpdate={handleTimeUpdate}
-                  onEnded={() => {}}
+                  onEnded={() => { if (isLeader) socket.emit('room:next_episode') }}
                 />
               </div>
 

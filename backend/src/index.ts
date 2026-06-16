@@ -435,6 +435,48 @@ function parseTitleAndYear(filename: string): { title: string; year?: number } {
   return { title, year };
 }
 
+// ─── Episode / series detection ────────────────────────────────────────────────
+// Language/junk tokens that sometimes sit where an episode title would be.
+const EP_JUNK = /\b(german|english|french|spanish|italian|russian|multi|dual|complete|internal|dubbed|subbed|uncut|extended)\b/i;
+
+function cleanSeriesTitle(raw: string): string {
+  let s = raw.replace(/[\s\-]+$/, '').trim();
+  const tok = s.match(RELEASE_TOKENS); if (tok && (tok.index ?? 0) > 2) s = s.slice(0, tok.index);
+  s = s.replace(/\b(19[5-9]\d|20[0-3]\d)\b\s*$/, '').trim(); // trailing year
+  s = s.replace(/[\s._\-]+$/, '').trim();
+  return s;
+}
+
+function cleanEpisodeTitle(rest: string | undefined): string | undefined {
+  let s = (rest ?? '').replace(/^[\s\-.]+/, '');
+  for (const re of [RELEASE_TOKENS, EP_JUNK]) {
+    const tok = s.match(re); if (tok) s = s.slice(0, tok.index);
+  }
+  s = s.replace(/[\s._\-]+$/, '').trim();
+  if (s.length < 2 || /^\d+$/.test(s)) return undefined;
+  return s;
+}
+
+interface EpisodeInfo { seriesTitle: string; season: number; episode: number; episodeTitle?: string }
+
+/** Detect "Show S01E03 …" / "Show 1x03" / "Show Season 1 Episode 3". null otherwise. */
+function parseEpisodeInfo(filename: string): EpisodeInfo | null {
+  const base = filename.replace(/\.[^.]+$/, '').replace(/[._]+/g, ' ').trim();
+  const pats = [
+    /^(.*?)[\s\-]*s(\d{1,2})\s*[ex]\s*(\d{1,3})\b(.*)$/i,
+    /^(.*?)[\s\-]*(\d{1,2})x(\d{1,3})\b(.*)$/i,
+    /^(.*?)[\s\-]*season\s*(\d{1,2}).*?episode\s*(\d{1,3})\b(.*)$/i,
+  ];
+  for (const p of pats) {
+    const m = base.match(p);
+    if (!m) continue;
+    const seriesTitle = cleanSeriesTitle(m[1]);
+    if (!seriesTitle) continue;
+    return { seriesTitle, season: parseInt(m[2]), episode: parseInt(m[3]), episodeTitle: cleanEpisodeTitle(m[4]) };
+  }
+  return null;
+}
+
 interface TmdbMeta {
   title: string; year: number; poster: string; thumbnail: string;
   genre: string; description: string;
@@ -660,7 +702,7 @@ async function attachSubtitles(mediaId: string, filePath: string, externalSubFil
 import * as rm from './roomManager';
 import * as auth from './auth';
 import * as dl from './downloads';
-import { MediaItem } from './types';
+import { MediaItem, Series } from './types';
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -689,6 +731,7 @@ const upload = multer({
 
 // ── Media library (loaded from DB at startup, updated on torrent completion) ──
 const mediaLibrary: MediaItem[] = [];
+const seriesLibrary: Series[] = [];
 
 function dbRowToMediaItem(row: any): MediaItem {
   return {
@@ -699,7 +742,45 @@ function dbRowToMediaItem(row: any): MediaItem {
     qualities: row.qualities as string[],
     status: row.status as MediaItem['status'],
     videoUrl: row.videoUrl,
+    seriesId: row.seriesId ?? null,
+    season: row.season ?? null,
+    episode: row.episode ?? null,
+    episodeTitle: row.episodeTitle ?? null,
   };
+}
+
+function dbRowToSeries(row: any): Series {
+  return {
+    id: row.id, title: row.title, poster: row.poster, thumbnail: row.thumbnail,
+    year: row.year, genre: row.genre, description: row.description,
+  };
+}
+
+/** Find an existing series by (case-insensitive) title, or create one. */
+async function findOrCreateSeries(title: string, meta: { poster?: string; thumbnail?: string; year?: number; genre?: string }): Promise<Series> {
+  const existing = seriesLibrary.find(s => s.title.toLowerCase() === title.toLowerCase());
+  if (existing) return existing;
+  const s: Series = {
+    id: uuidv4(), title,
+    poster: meta.poster || '', thumbnail: meta.thumbnail || '',
+    year: meta.year || 0, genre: meta.genre || 'Сериал', description: '',
+  };
+  seriesLibrary.push(s);
+  await db.series.create({ data: { id: s.id, title: s.title, poster: s.poster, thumbnail: s.thumbnail, year: s.year, genre: s.genre, description: s.description } })
+    .catch((e: Error) => console.warn('[series] create failed:', e.message));
+  return s;
+}
+
+/** The next ready episode after `currentMediaId` within its series, or null. */
+function nextEpisode(currentMediaId: string): MediaItem | null {
+  const cur = mediaLibrary.find(m => m.id === currentMediaId);
+  if (!cur || !cur.seriesId) return null;
+  const eps = mediaLibrary
+    .filter(m => m.seriesId === cur.seriesId && m.status === 'ready')
+    .sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0));
+  const idx = eps.findIndex(m => m.id === currentMediaId);
+  if (idx === -1 || idx + 1 >= eps.length) return null;
+  return eps[idx + 1];
 }
 
 dl.setOnCompleted(async (item) => {
@@ -747,15 +828,29 @@ dl.setOnCompleted(async (item) => {
 
     console.log(`[media] "${title}" → ${isDirectMp4 ? 'direct MP4' : 'HLS on-demand'}`);
 
-    // Fetch metadata from TMDB (uses filename → clean title → TMDB search)
-    const tmdb = await fetchTmdbMetadata(f.name);
-    const finalTitle       = tmdb?.title       ?? title;
+    // Episodes (Show S01E03 …) are grouped under a Series; standalone files get
+    // TMDB metadata. Missing posters are left empty so the UI renders a titled
+    // gradient instead of a random stock image.
+    const epInfo = parseEpisodeInfo(f.name);
+    const tmdb = epInfo ? null : await fetchTmdbMetadata(f.name);
     const finalYear        = tmdb?.year        ?? new Date().getFullYear();
-    const finalGenre       = tmdb?.genre       ?? 'Фильм';
+    const finalGenre       = tmdb?.genre       ?? (epInfo ? 'Сериал' : 'Фильм');
     const finalDescription = tmdb?.description ?? '';
-    const finalPoster      = tmdb?.poster      || `https://picsum.photos/seed/${item.id}/400/600`;
-    const finalThumbnail   = tmdb?.thumbnail   || `https://picsum.photos/seed/${item.id}/800/450`;
-    if (tmdb) console.log(`[tmdb] matched "${f.name}" → "${finalTitle}" (${finalYear})`);
+    const finalPoster      = tmdb?.poster      ?? '';
+    const finalThumbnail   = tmdb?.thumbnail   ?? '';
+
+    let seriesId: string | null = null, season: number | null = null, episode: number | null = null, episodeTitle: string | null = null;
+    let finalTitle: string;
+    if (epInfo) {
+      const series = await findOrCreateSeries(epInfo.seriesTitle, { year: finalYear });
+      seriesId = series.id; season = epInfo.season; episode = epInfo.episode;
+      episodeTitle = epInfo.episodeTitle ?? null;
+      finalTitle = episodeTitle ?? `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
+      console.log(`[series] "${epInfo.seriesTitle}" S${season}E${episode} → "${finalTitle}"`);
+    } else {
+      finalTitle = tmdb?.title ?? title;
+      if (tmdb) console.log(`[tmdb] matched "${f.name}" → "${finalTitle}" (${finalYear})`);
+    }
 
     // Start background MP4 conversion (non-blocking) — file immediately watchable via HLS,
     // switches to faststart MP4 when done for native browser seeking
@@ -772,6 +867,7 @@ dl.setOnCompleted(async (item) => {
       genre: finalGenre, description: finalDescription,
       audio, subtitles,
       qualities: ['Auto'], status: 'ready', videoUrl,
+      seriesId, season, episode, episodeTitle,
     };
     mediaLibrary.push(newItem);
     item.mediaIds.push(tempId);
@@ -799,6 +895,7 @@ dl.setOnCompleted(async (item) => {
         audio: audio as any, subtitles: subtitles as any,
         qualities: newItem.qualities as any, status: 'ready',
         videoUrl,
+        seriesId, season, episode, episodeTitle,
       },
     }).catch((e: Error) => console.error('[media] DB save failed:', e.message));
   }
@@ -936,6 +1033,18 @@ app.delete('/api/auth/account', requireAuth, async (req, res) => {
 
 // ── Media routes ──────────────────────────────────────────────────────────────
 app.get('/api/media', requireAuth, (_req, res) => { res.json(mediaLibrary); });
+
+// Series grouped with their episodes (sorted by season/episode).
+app.get('/api/series', requireAuth, (_req, res) => {
+  const series = seriesLibrary.map(s => {
+    const episodes = mediaLibrary
+      .filter(m => m.seriesId === s.id)
+      .sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0));
+    const seasons = new Set(episodes.map(e => e.season ?? 1)).size;
+    return { ...s, episodes, episodeCount: episodes.length, seasons };
+  }).filter(s => s.episodeCount > 0);
+  res.json({ series });
+});
 
 app.get('/api/media/:id', requireAuth, (req, res) => {
   const item = mediaLibrary.find(m => m.id === req.params.id);
@@ -1498,6 +1607,22 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
+  // Series auto-advance: jump to the next episode and start it automatically.
+  socket.on('room:next_episode', (cb?: (r: unknown) => void) => {
+    const rid = socket.data.roomId;
+    if (!rid || !isLeader()) { cb?.({ error: 'Not leader' }); return; }
+    const room = rm.getRoomById(rid);
+    if (!room) { cb?.({ error: 'Room not found' }); return; }
+    const next = nextEpisode(room.mediaId);
+    if (!next) { cb?.({ error: 'No next episode' }); return; }
+    const updated = rm.switchToQueuedMedia(rid, next.id, next.title, next.poster, next.duration);
+    if (!updated) return;
+    // Auto-play the next episode from the start (binge mode).
+    rm.updateRoomPlayback(rid, { currentTime: 0, isPlaying: true });
+    io.to(rid).emit('room:media_changed', { room: { ...updated, currentTime: 0, isPlaying: true }, media: next });
+    cb?.({ success: true });
+  });
+
   socket.on('disconnect', () => {
     console.log(`[-] ${socket.data.nickname} (${socket.id})`);
     const roomId = socket.data.roomId;
@@ -1675,10 +1800,12 @@ async function main() {
   // Load downloads from DB (resumes queued, marks interrupted as error)
   await dl.init();
 
-  // Load media library from DB
+  // Load media library + series from DB
   const dbMedia = await db.mediaItem.findMany({ orderBy: { createdAt: 'desc' } });
   mediaLibrary.push(...dbMedia.map(dbRowToMediaItem));
-  console.log(`[db] ${dbMedia.length} media items, ${dl.list().length} downloads loaded`);
+  const dbSeries = await db.series.findMany();
+  seriesLibrary.push(...dbSeries.map(dbRowToSeries));
+  console.log(`[db] ${dbMedia.length} media items, ${dbSeries.length} series, ${dl.list().length} downloads loaded`);
 
   const PORT = process.env.PORT || 3001;
   httpServer.listen(PORT, () => {

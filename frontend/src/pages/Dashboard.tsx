@@ -7,10 +7,12 @@ import DownloadingCard from '../components/DownloadingCard'
 import RoomCard from '../components/RoomCard'
 import CreateRoomModal from '../components/CreateRoomModal'
 import Poster from '../components/Poster'
+import SeriesCard from '../components/SeriesCard'
+import SeriesModal from '../components/SeriesModal'
 import { useStore, apiFetch, apiDelete, apiPost } from '../store'
 import { translations } from '../i18n'
 import { socket, connectSocket } from '../socket'
-import { MediaItem, RoomState, User, ActiveSession } from '../types'
+import { MediaItem, RoomState, User, ActiveSession, Series } from '../types'
 
 function formatBytes(b: number): string {
   if (b < 1024) return `${b} B`
@@ -43,6 +45,8 @@ export default function Dashboard() {
   const [myRooms, setMyRooms] = useState<{ id: string; name: string; mediaTitle: string; mediaPoster: string; participantCount: number; maxParticipants: number; isPlaying: boolean; isLocked: boolean; isLeader: boolean }[]>([])
   const [storageBytes, setStorageBytes] = useState<number | null>(null)
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([])
+  const [seriesList, setSeriesList] = useState<Series[]>([])
+  const [openSeries, setOpenSeries] = useState<Series | null>(null)
 
   useEffect(() => {
     apiFetch<MediaItem[]>('/api/media')
@@ -72,6 +76,13 @@ export default function Dashboard() {
       })
       .catch(() => {})
   }, [setProgress])
+
+  // Series (grouped episodes) — refetch when the library changes
+  useEffect(() => {
+    apiFetch<{ series: Series[] }>('/api/series')
+      .then(r => { if (Array.isArray(r.series)) setSeriesList(r.series) })
+      .catch(() => {})
+  }, [mediaLibrary.length])
 
   // Active sessions browser — refresh every 10s
   useEffect(() => {
@@ -145,13 +156,22 @@ export default function Dashboard() {
     // download progress appears in the Downloads panel
   }, [])
 
+  const handlePlayEpisode = (mediaId: string) => {
+    setOpenSeries(null)
+    handleOpenCreate(mediaId)
+  }
+
   const filtered = mediaLibrary.filter(m =>
     m.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     m.genre.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const readyMedia = filtered.filter(m => m.status === 'ready')
-  const processingMedia = filtered.filter(m => m.status !== 'ready')
+  // Standalone films only — episodes live inside their Series card.
+  const readyMedia = filtered.filter(m => m.status === 'ready' && !m.seriesId)
+  const processingMedia = filtered.filter(m => m.status !== 'ready' && !m.seriesId)
+  const filteredSeries = seriesList.filter(s =>
+    s.title.toLowerCase().includes(searchQuery.toLowerCase())
+  )
 
   // Active downloads that don't yet have a media entry — shown as "in-coming" cards
   const downloadingItems = downloads.filter(d =>
@@ -317,7 +337,7 @@ export default function Dashboard() {
                 <div key={i} className="aspect-[2/3] rounded-xl bg-cinema-card animate-pulse" />
               ))}
             </div>
-          ) : readyMedia.length === 0 && processingMedia.length === 0 && downloadingItems.length === 0 ? (
+          ) : readyMedia.length === 0 && processingMedia.length === 0 && downloadingItems.length === 0 && filteredSeries.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <div className="w-16 h-16 rounded-2xl accent-gradient flex items-center justify-center mb-4 opacity-30">
                 <Film size={28} className="text-white" />
@@ -338,6 +358,10 @@ export default function Dashboard() {
               {/* Processing (remuxing/converting) */}
               {processingMedia.map(item => (
                 <MediaCard key={item.id} item={item} />
+              ))}
+              {/* Series (grouped episodes) */}
+              {filteredSeries.map(s => (
+                <SeriesCard key={s.id} series={s} progress={progress} onOpen={setOpenSeries} />
               ))}
               {/* Ready to watch */}
               {readyMedia.map(item => (
@@ -397,6 +421,15 @@ export default function Dashboard() {
           preselectedMediaId={preselectedMedia}
           onClose={() => setCreateModalOpen(false)}
           onCreate={handleCreateRoom}
+        />
+      )}
+
+      {openSeries && (
+        <SeriesModal
+          series={openSeries}
+          progress={progress}
+          onClose={() => setOpenSeries(null)}
+          onPlay={handlePlayEpisode}
         />
       )}
     </div>

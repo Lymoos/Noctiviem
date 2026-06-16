@@ -71,9 +71,28 @@ model MediaItem {
   qualities   Json     @default("[]")
   status      String   @default("processing")
   videoUrl    String
+  // Series grouping (null for standalone films)
+  seriesId     String?
+  season       Int?
+  episode      Int?
+  episodeTitle String?
   createdAt   DateTime @default(now())
 
+  @@index([seriesId])
   @@map("media_items")
+}
+
+model Series {
+  id          String   @id @default(uuid())
+  title       String
+  poster      String   @default("")
+  thumbnail   String   @default("")
+  year        Int      @default(0)
+  genre       String   @default("")
+  description String   @default("")
+  createdAt   DateTime @default(now())
+
+  @@map("series")
 }
 
 model Download {

@@ -23,10 +23,13 @@ export default function Poster({ src, title, seed, className = '', compact = fal
   const hue = hueFromString(seed || title || 'x')
   const bg = `radial-gradient(ellipse at 50% 22%, hsl(${hue} 55% 26%) 0%, hsl(${(hue + 40) % 360} 45% 13%) 55%, hsl(${(hue + 90) % 360} 35% 7%) 100%)`
 
-  if (src && !failed) {
+  // Treat legacy random placeholders as "no poster" → show the titled gradient.
+  const realSrc = src && !src.includes('picsum.photos') ? src : ''
+
+  if (realSrc && !failed) {
     return (
       <img
-        src={src}
+        src={realSrc}
         alt={title}
         className={className}
         loading="lazy"

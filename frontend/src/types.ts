@@ -76,6 +76,24 @@ export interface MediaItem {
   progress?: number; // 0-99 during processing, set by media:progress socket event
   converting?: boolean; // true while background MP4 remux is running
   convertingProgress?: number; // 0-99 during background MP4 conversion
+  // Series grouping (null/undefined for standalone films)
+  seriesId?: string | null;
+  season?: number | null;
+  episode?: number | null;
+  episodeTitle?: string | null;
+}
+
+export interface Series {
+  id: string;
+  title: string;
+  poster: string;
+  thumbnail: string;
+  year: number;
+  genre: string;
+  description: string;
+  episodes: MediaItem[];
+  episodeCount: number;
+  seasons: number;
 }
 
 export interface RoomPreview {

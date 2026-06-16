@@ -76,4 +76,19 @@ export interface MediaItem {
   qualities: string[];
   status: 'ready' | 'processing' | 'error';
   videoUrl: string;
+  // Series grouping (null/undefined for standalone films)
+  seriesId?: string | null;
+  season?: number | null;
+  episode?: number | null;
+  episodeTitle?: string | null;
+}
+
+export interface Series {
+  id: string;
+  title: string;
+  poster: string;
+  thumbnail: string;
+  year: number;
+  genre: string;
+  description: string;
 }

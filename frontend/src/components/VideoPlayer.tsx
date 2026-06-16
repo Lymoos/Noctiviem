@@ -34,6 +34,10 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   // Last known playback position — used to resume after an HLS source swap
   // (audio-track change reloads the manifest, which would otherwise restart at 0).
   const resumeTimeRef = useRef(serverTime)
+  // Tracks the last loaded source URL to distinguish a real media change (new
+  // episode/film → seek to serverTime) from an in-place audio-track swap
+  // (same media → resume at the current position).
+  const lastUrlRef = useRef<string | null>(null)
 
   const isLeader = useStore(selectIsLeader)
   const room = useStore(s => s.room)
@@ -75,9 +79,12 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
       hlsRef.current = null
     }
 
-    // Restore position after a source swap (audio-track change). On first mount
-    // resumeTimeRef === serverTime so a fresh join still starts at the right spot.
-    const seekTo = resumeTimeRef.current
+    // New media (episode/film) → seek to the shared serverTime; in-place audio
+    // swap (same url) → resume at the current local position.
+    const isNewMedia = lastUrlRef.current !== media.videoUrl
+    lastUrlRef.current = media.videoUrl
+    const seekTo = isNewMedia ? serverTime : resumeTimeRef.current
+    resumeTimeRef.current = seekTo
     const resume = () => { if (seekTo > 0.5) { try { video.currentTime = seekTo } catch {} } }
 
     if (isHls) {
