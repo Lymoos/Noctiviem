@@ -2,13 +2,14 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Crown, Users, MessageSquare, Share2, Settings,
-  ArrowLeft, Copy, CheckCheck, Wifi, WifiOff, X,
-  MonitorPlay, Columns,
+  ArrowLeft, CheckCheck, WifiOff,
+  MonitorPlay, Columns, Play, Pause,
 } from 'lucide-react'
 import VideoPlayer from '../components/VideoPlayer'
 import CinemaHall from '../components/CinemaHall'
 import Chat from '../components/Chat'
 import LeaderPanel from '../components/LeaderPanel'
+import Avatar from '../components/Avatar'
 import { useStore, selectIsLeader } from '../store'
 import { socket, connectSocket, getLocalUserId } from '../socket'
 import { RoomState, MediaItem, Message, Reaction, User, FloatingReaction } from '../types'
@@ -287,9 +288,12 @@ export default function Room() {
           <p className="text-xs text-cinema-muted truncate">{media.title}</p>
         </div>
 
-        {/* Timer */}
-        <div className="text-xs font-mono text-slate-500 flex-shrink-0 hidden sm:block">
-          {timer}
+        {/* Playback state + timer */}
+        <div className="text-xs font-mono flex-shrink-0 hidden sm:flex items-center gap-1.5">
+          {room.isPlaying
+            ? <Play size={10} fill="currentColor" className="text-green-400" />
+            : <Pause size={10} className="text-amber-400" />}
+          <span className="text-slate-500">{timer}</span>
         </div>
 
         {/* Sync status */}
@@ -307,10 +311,19 @@ export default function Room() {
           )}
         </div>
 
-        {/* Participants */}
-        <div className="flex items-center gap-1.5 text-xs text-slate-500 flex-shrink-0">
-          <Users size={13} />
-          <span>{room.participants.length}</span>
+        {/* Participants presence — stacked avatars of who's watching */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex -space-x-2">
+            {room.participants.slice(0, 5).map(p => (
+              <div key={p.id} className="rounded-full ring-2 ring-cinema-bg" title={p.nickname}>
+                <Avatar seed={p.id} name={p.nickname} src={p.avatar} size={22} />
+              </div>
+            ))}
+          </div>
+          <span className="flex items-center gap-1 text-xs text-slate-500">
+            <Users size={12} />
+            {room.participants.length}
+          </span>
         </div>
 
         {/* Invite */}

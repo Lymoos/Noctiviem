@@ -49,6 +49,9 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [hlsError, setHlsError] = useState(false)
+  // Browsers block autoplay with sound until the user interacts. When the Leader
+  // starts playback, viewers may need one tap to begin with audio.
+  const [needsGesture, setNeedsGesture] = useState(false)
 
   const selectedAudio = room?.selectedAudio ?? 0
   const selectedSubs = room?.selectedSubs ?? 'off'
@@ -125,7 +128,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
     const video = videoRef.current
     if (!video) return
     if (isPlaying && video.paused) {
-      video.play().catch(() => {})
+      video.play().then(() => setNeedsGesture(false)).catch(() => setNeedsGesture(true))
     } else if (!isPlaying && !video.paused) {
       video.pause()
     }
@@ -346,6 +349,24 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 glass px-3 py-1.5 rounded-full text-xs text-purple-300 flex items-center gap-2">
           <Gauge size={12} className="animate-spin" />
           Syncing…
+        </div>
+      )}
+
+      {/* Autoplay blocked — viewer needs one tap to start with sound */}
+      {needsGesture && isPlaying && (
+        <div
+          className="absolute inset-0 z-30 bg-black/70 flex flex-col items-center justify-center gap-3 cursor-pointer"
+          onClick={() => {
+            const video = videoRef.current
+            if (!video) return
+            video.muted = false
+            video.play().then(() => setNeedsGesture(false)).catch(() => {})
+          }}
+        >
+          <div className="w-16 h-16 rounded-full accent-gradient flex items-center justify-center" style={{ boxShadow: '0 0 40px rgba(124,58,237,0.5)' }}>
+            <Play size={28} fill="white" className="text-white ml-1" />
+          </div>
+          <p className="text-sm text-white/90">Нажмите, чтобы смотреть вместе</p>
         </div>
       )}
 

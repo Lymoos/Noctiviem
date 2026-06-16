@@ -48,6 +48,11 @@ export default function Chat({ messages, currentUserId, chatEnabled, onClose }: 
     socket.emit('room:delete_message', { messageId })
   }
 
+  // Whispers are only visible to the sender and the recipient.
+  const visible = messages.filter(
+    m => !m.isWhisper || m.userId === currentUserId || m.whisperToId === currentUserId,
+  )
+
   return (
     <div className="flex flex-col h-full glass-strong rounded-xl overflow-hidden"
       style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -75,40 +80,44 @@ export default function Chat({ messages, currentUserId, chatEnabled, onClose }: 
       <div
         ref={listRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-3 py-3 space-y-2 min-h-0"
+        className="flex-1 overflow-y-auto px-3 py-3 min-h-0"
       >
-        {messages.length === 0 && (
+        {visible.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-8">
             <MessageSquare size={24} className="text-slate-700 mb-2" />
             <p className="text-xs text-slate-600">No messages yet</p>
             <p className="text-xs text-slate-700 mt-1">Say something!</p>
           </div>
-        )}
-
-        {messages.map(msg => {
+        ) : visible.map((msg, i) => {
+          const prev = visible[i - 1]
           const isOwn = msg.userId === currentUserId
-          const isVisible = !msg.isWhisper || msg.userId === currentUserId || msg.whisperToId === currentUserId
-
-          if (!isVisible) return null
+          // Group consecutive messages from the same sender within 4 minutes —
+          // hide the repeated avatar/name for a calmer, more readable thread.
+          const grouped = !!prev
+            && prev.userId === msg.userId
+            && Boolean(prev.isWhisper) === Boolean(msg.isWhisper)
+            && (msg.timestamp - prev.timestamp) < 4 * 60 * 1000
 
           return (
-            <div key={msg.id} className={`group flex items-start gap-2 ${isOwn ? 'flex-row-reverse' : ''}`}>
-              {/* Avatar */}
-              <div className="mt-0.5">
-                <Avatar seed={msg.userId} name={msg.nickname} src={msg.avatar} size={26} />
-              </div>
+            <div key={msg.id} className={`group flex items-start gap-2 ${isOwn ? 'flex-row-reverse' : ''} ${grouped ? 'mt-0.5' : 'mt-3 first:mt-0'}`}>
+              {/* Avatar (only on the first message of a group) */}
+              {grouped
+                ? <div className="w-[26px] flex-shrink-0" />
+                : <div className="mt-0.5"><Avatar seed={msg.userId} name={msg.nickname} src={msg.avatar} size={26} /></div>}
 
               <div className={`flex flex-col ${isOwn ? 'items-end' : 'items-start'} flex-1 min-w-0`}>
                 {/* Name + time */}
-                <div className={`flex items-center gap-1.5 mb-0.5 ${isOwn ? 'flex-row-reverse' : ''}`}>
-                  <span className={`text-xs font-medium ${isOwn ? 'text-purple-300' : 'text-slate-400'}`}>
-                    {isOwn ? 'You' : msg.nickname}
-                  </span>
-                  <span className="text-xs text-slate-700">{formatTime(msg.timestamp)}</span>
-                  {msg.isWhisper && (
-                    <span className="text-xs text-purple-500/70">🤫</span>
-                  )}
-                </div>
+                {!grouped && (
+                  <div className={`flex items-center gap-1.5 mb-0.5 ${isOwn ? 'flex-row-reverse' : ''}`}>
+                    <span className={`text-xs font-medium ${isOwn ? 'text-purple-300' : 'text-slate-400'}`}>
+                      {isOwn ? 'You' : msg.nickname}
+                    </span>
+                    <span className="text-xs text-slate-700">{formatTime(msg.timestamp)}</span>
+                    {msg.isWhisper && (
+                      <span className="text-xs text-purple-500/70">🤫</span>
+                    )}
+                  </div>
+                )}
 
                 {/* Message bubble */}
                 <div className={`relative max-w-[85%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
