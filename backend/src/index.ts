@@ -71,8 +71,18 @@ const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis']);
 
 // ─── HLS on-demand ────────────────────────────────────────────────────────────
 // Instead of copying the entire file to a new MP4 (can take 1.5h for 25GB),
-// we generate 10-second MPEG-TS segments on-demand using ffmpeg stream copy.
+// we generate MPEG-TS segments on-demand using ffmpeg stream copy.
 // Files become available immediately after download — no waiting for conversion.
+//
+// Segment boundaries follow the source's own keyframes rather than a fixed clock.
+// Video is stream-copied, and a copied stream can only start at a keyframe: asking
+// ffmpeg to cut at an arbitrary second makes it rewind to the keyframe before,
+// so the segment carries more video than the playlist claims. Audio, being
+// re-encoded, honours the exact request — which is how video and audio inside one
+// segment ended up describing different parts of the film.
+//
+// Video and audio are served as separate renditions (EXT-X-MEDIA), so switching
+// dub does not refetch video and hls.js can drive it natively.
 const HLS_SEG_SECS = 10;
 
 // How many segments beyond the requested one to warm up, so the player is not
@@ -121,23 +131,107 @@ function evictHlsCache() {
   }
 }
 
-/** Cut one segment with ffmpeg. Goes through the concurrency gate; never call directly. */
-async function renderHlsSegment(filePath: string, idx: number, hasAudio: boolean): Promise<Buffer> {
+// ── Keyframe index ────────────────────────────────────────────────────────────
+// Segment boundaries have to sit on real keyframes, so we ask the file where its
+// keyframes are. `-skip_frame nokey` prints only those, which is far cheaper than
+// listing every packet (measured ~40x on the same file).
+interface HlsIndex {
+  /** Segment start times; segment i spans boundaries[i] .. boundaries[i+1] (last one to duration). */
+  boundaries: number[];
+  duration: number;
+  audioCount: number;
+}
+const hlsIndexCache = new Map<string, Promise<HlsIndex>>();
+
+async function probeKeyframes(filePath: string): Promise<number[]> {
+  const { stdout } = await execFileAsync('ffprobe', [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-skip_frame', 'nokey',
+    '-show_entries', 'frame=pts_time',
+    '-of', 'csv=p=0',
+    filePath,
+  ], { timeout: 30 * 60 * 1000, maxBuffer: 128 * 1024 * 1024 });
+  return stdout.split('\n')
+    .map(l => parseFloat(l))
+    .filter(n => Number.isFinite(n) && n >= 0)
+    .sort((a, b) => a - b);
+}
+
+async function buildHlsIndex(filePath: string, duration: number, audioCount: number): Promise<HlsIndex> {
+  let keyframes: number[] = [];
+  try {
+    keyframes = await probeKeyframes(filePath);
+  } catch (e: any) {
+    console.warn(`[hls-index] keyframe probe failed for ${path.basename(filePath)}: ${e.message}`);
+  }
+
+  const boundaries: number[] = [0];
+  // Open a new segment at the first keyframe that is at least HLS_SEG_SECS past
+  // the current one, so segments land near the target length without ever cutting
+  // between keyframes.
+  for (const t of keyframes) {
+    if (t - boundaries[boundaries.length - 1] >= HLS_SEG_SECS - 0.001) boundaries.push(t);
+  }
+  // Without a usable keyframe list, fall back to a fixed grid. Playback is then no
+  // worse than a naive cut, and the file is still watchable.
+  if (boundaries.length === 1 && duration > HLS_SEG_SECS) {
+    for (let t = HLS_SEG_SECS; t < duration; t += HLS_SEG_SECS) boundaries.push(t);
+    console.warn(`[hls-index] no keyframes for ${path.basename(filePath)} — using a fixed ${HLS_SEG_SECS}s grid`);
+  }
+  // A trailing boundary within a second of the end would make a useless sliver.
+  while (boundaries.length > 1 && duration - boundaries[boundaries.length - 1] < 1) boundaries.pop();
+
+  console.log(`[hls-index] ${path.basename(filePath)}: ${keyframes.length} keyframes → ${boundaries.length} segments`);
+  return { boundaries, duration, audioCount };
+}
+
+function getHlsIndex(filePath: string, mediaId: string, duration: number, audioCount: number): Promise<HlsIndex> {
+  const cached = hlsIndexCache.get(mediaId);
+  if (cached) return cached;
+  const p = buildHlsIndex(filePath, duration, audioCount);
+  hlsIndexCache.set(mediaId, p);
+  p.catch(() => hlsIndexCache.delete(mediaId));
+  return p;
+}
+
+/**
+ * Cut one segment with ffmpeg. Goes through the concurrency gate; never call directly.
+ *
+ * `-copyts` keeps the source timeline, so video and audio renditions line up
+ * without the player having to guess an offset. `-noaccurate_seek` makes the
+ * demuxer land on a keyframe instead of decoding up to an exact second, which is
+ * what keeps a copied video stream and a re-encoded audio stream describing the
+ * same moment. Seeking a hair past the boundary lands on that boundary's own
+ * keyframe rather than the one before it — ffmpeg rewinds to the last keyframe
+ * strictly before the requested time.
+ */
+async function renderHlsSegment(
+  filePath: string, start: number, end: number, track: number | null,
+): Promise<Buffer> {
   const release = await acquireFfmpegSlot();
   try {
     return await new Promise<Buffer>((resolve, reject) => {
-      const audioArgs = hasAudio
-        ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
-        : [];
+      // Video is copied, so it can only begin at a keyframe: seek a hair past the
+      // boundary and let ffmpeg rewind onto that boundary's own keyframe, and use
+      // -noaccurate_seek so the demuxer stops there instead of hunting further.
+      // Audio is re-encoded and can start anywhere, so it takes an exact seek and
+      // lands on the boundary itself. Both keep source timestamps (-copyts), which
+      // is what lines the two renditions up in the player.
+      const seekNudge = Math.min(0.25, Math.max(0, (end - start) / 8));
+      const isVideo = track === null;
+      const streamArgs = isVideo
+        ? ['-map', '0:v:0', '-c:v', 'copy']
+        : ['-map', `0:a:${track}`, '-c:a', 'aac', '-b:a', '192k', '-ac', '2'];
       const proc = spawn('ffmpeg', [
-        '-ss', String(idx * HLS_SEG_SECS),
+        ...(isVideo ? ['-noaccurate_seek'] : []),
+        '-copyts',
+        '-ss', (start + (isVideo ? seekNudge : 0)).toFixed(6),
         '-i', filePath,
-        '-t', String(HLS_SEG_SECS),
-        '-map', '0:v:0',
-        ...audioArgs,
-        '-c:v', 'copy',
-        '-avoid_negative_ts', 'make_zero',
-        '-reset_timestamps', '1',
+        '-to', end.toFixed(6),
+        ...streamArgs,
+        '-muxdelay', '0',
+        '-muxpreload', '0',
         '-max_muxing_queue_size', '1024',
         '-f', 'mpegts',
         'pipe:1',
@@ -147,7 +241,7 @@ async function renderHlsSegment(filePath: string, idx: number, hasAudio: boolean
       proc.stdout!.on('data', (c: Buffer) => chunks.push(c));
       proc.on('close', code => {
         if (code === 0) resolve(Buffer.concat(chunks));
-        else reject(new Error(`ffmpeg segment ${idx} exited ${code}`));
+        else reject(new Error(`ffmpeg segment ${start}-${end} (track ${track}) exited ${code}`));
       });
       proc.on('error', reject);
     });
@@ -158,13 +252,15 @@ async function renderHlsSegment(filePath: string, idx: number, hasAudio: boolean
 
 function getHlsSegment(
   filePath: string, mediaId: string, idx: number,
-  hasAudio = true, totalSegs?: number, prewarm = true,
+  index: HlsIndex, track: number | null, prewarm = true,
 ): Promise<Buffer> {
-  const key = `${mediaId}:${idx}`;
+  const key = `${mediaId}:${track ?? 'v'}:${idx}`;
   const cached = hlsSegCache.get(key);
   if (cached) return cached;
 
-  const p = renderHlsSegment(filePath, idx, hasAudio);
+  const start = index.boundaries[idx];
+  const end = index.boundaries[idx + 1] ?? index.duration;
+  const p = renderHlsSegment(filePath, start, end, track);
 
   // Cache BEFORE pre-warming. The pre-warm calls below re-enter this function,
   // and if this entry were not already in place they would all miss, recurse
@@ -182,10 +278,10 @@ function getHlsSegment(
   if (prewarm) {
     for (let ahead = 1; ahead <= HLS_PREWARM; ahead++) {
       const nextIdx = idx + ahead;
-      if (totalSegs !== undefined && nextIdx >= totalSegs) break;
+      if (nextIdx >= index.boundaries.length) break;
       // prewarm: false — neighbours must not warm their own neighbours, or the
       // chain runs to the end of the film regardless of the caching above.
-      getHlsSegment(filePath, mediaId, nextIdx, hasAudio, totalSegs, false).catch(() => {});
+      getHlsSegment(filePath, mediaId, nextIdx, index, track, false).catch(() => {});
     }
   }
 
@@ -402,10 +498,12 @@ async function backgroundRemux(mediaId: string, inputPath: string, title: string
     const item = mediaLibrary.find(m => m.id === mediaId);
     if (item) {
       item.videoUrl = mp4Url;
-      // Clear HLS segment cache for this item so stale segments are not served
+      // Clear HLS segment cache and keyframe index for this item: the source file
+      // is about to be deleted, so anything derived from it is stale.
       for (const k of Array.from(hlsSegCache.keys())) {
         if (k.startsWith(mediaId + ':')) hlsSegCache.delete(k);
       }
+      hlsIndexCache.delete(mediaId);
     }
     await db.mediaItem.update({
       where:  { id: mediaId },
@@ -698,69 +796,130 @@ app.use('/media', express.static(dl.DOWNLOADS_DIR, {
   },
 }));
 
-// ── HLS manifest ─────────────────────────────────────────────────────────────
-// videoUrl format for HLS items: /hls-mkv/:id/index.m3u8?p=encodedRelPath
+// ── HLS playlists and segments ───────────────────────────────────────────────
+// videoUrl for HLS items: /hls-mkv/:id/index.m3u8?p=encodedRelPath
 // The relative path is URL-encoded inside ?p= so it survives server restarts.
-app.get('/hls-mkv/:id/index.m3u8', (req: Request, res: Response) => {
-  const { id } = req.params;
+
+/** Resolve and validate the source file behind a ?p= parameter. */
+function resolveHlsSource(req: Request, res: Response): { filePath: string; pParam: string } | null {
   const encodedRel = req.query.p as string;
-  if (!encodedRel) { res.status(400).end(); return; }
+  if (!encodedRel) { res.status(400).end(); return null; }
+  const relPath = decodeURIComponent(encodedRel);
+  const filePath = path.resolve(dl.DOWNLOADS_DIR, relPath);
+  // Prevent path traversal — resolve first, then confirm it stayed inside.
+  if (!filePath.startsWith(path.resolve(dl.DOWNLOADS_DIR) + path.sep)) { res.status(403).end(); return null; }
+  if (!fs.existsSync(filePath)) { res.status(404).end(); return null; }
+  return { filePath, pParam: `p=${encodeURIComponent(encodedRel)}` };
+}
 
-  const item = mediaLibrary.find(m => m.id === id);
-  if (!item) { res.status(404).end(); return; }
+/** Look up the media item and its segment boundaries, or answer the request and return null. */
+async function hlsContext(req: Request, res: Response) {
+  const src = resolveHlsSource(req, res);
+  if (!src) return null;
+  const item = mediaLibrary.find(m => m.id === req.params.id);
+  if (!item) { res.status(404).end(); return null; }
+  const audioCount = item.audio.length;
+  const index = await getHlsIndex(src.filePath, item.id, item.duration || 0, audioCount);
+  return { ...src, item, index };
+}
 
-  const duration = item.duration || 0;
-  const numSegs  = Math.ceil(duration / HLS_SEG_SECS) || 1;
-  const pParam   = `p=${encodeURIComponent(encodedRel)}`;
-
-  const lines: string[] = [
-    '#EXTM3U',
-    '#EXT-X-VERSION:3',
-    `#EXT-X-TARGETDURATION:${HLS_SEG_SECS}`,
-    '#EXT-X-MEDIA-SEQUENCE:0',
-    '#EXT-X-PLAYLIST-TYPE:VOD',
-  ];
-  for (let i = 0; i < numSegs; i++) {
-    const segLen = duration > 0
-      ? Math.min(HLS_SEG_SECS, duration - i * HLS_SEG_SECS)
-      : HLS_SEG_SECS;
-    lines.push(`#EXTINF:${segLen.toFixed(6)},`);
-    lines.push(`/hls-mkv/${id}/seg/${i}.ts?${pParam}`);
-  }
-  lines.push('#EXT-X-ENDLIST');
-
+function sendPlaylist(res: Response, lines: string[]) {
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Cache-Control', 'no-cache');
   res.send(lines.join('\n'));
+}
+
+/** Media playlist shared by the video rendition and every audio rendition. */
+function mediaPlaylist(index: HlsIndex, segUrl: (i: number) => string): string[] {
+  const lines = ['#EXTM3U', '#EXT-X-VERSION:4', '#EXT-X-INDEPENDENT-SEGMENTS'];
+  const durations = index.boundaries.map((start, i) =>
+    (index.boundaries[i + 1] ?? index.duration) - start);
+  const target = Math.max(1, Math.ceil(Math.max(...durations, HLS_SEG_SECS)));
+  lines.push(`#EXT-X-TARGETDURATION:${target}`, '#EXT-X-MEDIA-SEQUENCE:0', '#EXT-X-PLAYLIST-TYPE:VOD');
+  durations.forEach((d, i) => {
+    lines.push(`#EXTINF:${Math.max(d, 0).toFixed(6)},`);
+    lines.push(segUrl(i));
+  });
+  lines.push('#EXT-X-ENDLIST');
+  return lines;
+}
+
+// Master playlist: one video rendition plus one audio rendition per dub, so the
+// player can switch dub without refetching video.
+app.get('/hls-mkv/:id/index.m3u8', async (req: Request, res: Response) => {
+  try {
+    const ctx = await hlsContext(req, res);
+    if (!ctx) return;
+    const { item, pParam } = ctx;
+    const tracks = item.audio;
+
+    const lines = ['#EXTM3U', '#EXT-X-VERSION:4', '#EXT-X-INDEPENDENT-SEGMENTS'];
+    tracks.forEach((t, i) => {
+      const name = (t.label || `Track ${i + 1}`).replace(/"/g, "'");
+      lines.push(
+        `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="${name}",LANGUAGE="${t.lang || 'und'}",` +
+        `DEFAULT=${i === 0 ? 'YES' : 'NO'},AUTOSELECT=${i === 0 ? 'YES' : 'NO'},` +
+        `URI="/hls-mkv/${item.id}/audio/${i}.m3u8?${pParam}"`,
+      );
+    });
+    // No CODECS attribute on purpose: it would have to match the source exactly,
+    // and a wrong value fails MSE outright. hls.js reads the real codecs from the
+    // first segment it parses.
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=4000000${tracks.length ? ',AUDIO="aud"' : ''}`);
+    lines.push(`/hls-mkv/${item.id}/video.m3u8?${pParam}`);
+    sendPlaylist(res, lines);
+  } catch (e: any) {
+    console.error(`[hls-master] ${req.params.id} — ${e.message}`);
+    if (!res.headersSent) res.status(500).end();
+  }
 });
 
-// ── HLS segment ───────────────────────────────────────────────────────────────
-app.get('/hls-mkv/:id/seg/:idx.ts', async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const idx = parseInt(req.params.idx);
-  const encodedRel = req.query.p as string;
-  if (isNaN(idx) || !encodedRel) { res.status(400).end(); return; }
-
-  const relPath  = decodeURIComponent(encodedRel);
-  const filePath = path.join(dl.DOWNLOADS_DIR, relPath);
-  // Prevent path traversal
-  if (!filePath.startsWith(dl.DOWNLOADS_DIR)) { res.status(403).end(); return; }
-  if (!fs.existsSync(filePath)) { res.status(404).end(); return; }
-
+app.get('/hls-mkv/:id/video.m3u8', async (req: Request, res: Response) => {
   try {
-    const mediaItem = mediaLibrary.find(m => m.id === id);
-    const hasAudio  = !mediaItem || mediaItem.audio.length > 0;
-    const totalSegs = mediaItem?.duration ? Math.ceil(mediaItem.duration / HLS_SEG_SECS) : undefined;
-    const data = await getHlsSegment(filePath, id, idx, hasAudio, totalSegs);
+    const ctx = await hlsContext(req, res);
+    if (!ctx) return;
+    sendPlaylist(res, mediaPlaylist(ctx.index, i => `/hls-mkv/${ctx.item.id}/v/${i}.ts?${ctx.pParam}`));
+  } catch (e: any) {
+    console.error(`[hls-video-playlist] ${req.params.id} — ${e.message}`);
+    if (!res.headersSent) res.status(500).end();
+  }
+});
+
+app.get('/hls-mkv/:id/audio/:track.m3u8', async (req: Request, res: Response) => {
+  try {
+    const track = parseInt(req.params.track);
+    const ctx = await hlsContext(req, res);
+    if (!ctx) return;
+    if (isNaN(track) || track < 0 || track >= ctx.item.audio.length) { res.status(404).end(); return; }
+    sendPlaylist(res, mediaPlaylist(ctx.index, i => `/hls-mkv/${ctx.item.id}/a/${track}/${i}.ts?${ctx.pParam}`));
+  } catch (e: any) {
+    console.error(`[hls-audio-playlist] ${req.params.id} — ${e.message}`);
+    if (!res.headersSent) res.status(500).end();
+  }
+});
+
+async function serveSegment(req: Request, res: Response, idx: number, track: number | null) {
+  try {
+    const ctx = await hlsContext(req, res);
+    if (!ctx) return;
+    if (isNaN(idx) || idx < 0 || idx >= ctx.index.boundaries.length) { res.status(404).end(); return; }
+    if (track !== null && (isNaN(track) || track < 0 || track >= ctx.item.audio.length)) { res.status(404).end(); return; }
+    const data = await getHlsSegment(ctx.filePath, ctx.item.id, idx, ctx.index, track);
     res.setHeader('Content-Type', 'video/MP2T');
     res.setHeader('Content-Length', String(data.length));
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(data);
   } catch (e: any) {
-    console.error(`[hls-seg] ${id}:${idx} — ${e.message}`);
+    console.error(`[hls-seg] ${req.params.id} ${track === null ? 'video' : 'audio ' + track}:${idx} — ${e.message}`);
     if (!res.headersSent) res.status(500).end();
   }
-});
+}
+
+app.get('/hls-mkv/:id/v/:idx.ts', (req, res) =>
+  serveSegment(req, res, parseInt(req.params.idx), null));
+
+app.get('/hls-mkv/:id/a/:track/:idx.ts', (req, res) =>
+  serveSegment(req, res, parseInt(req.params.idx), parseInt(req.params.track)));
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 function requireAuth(req: Request, res: Response, next: NextFunction) {

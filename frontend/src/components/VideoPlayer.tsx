@@ -46,6 +46,11 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [hlsError, setHlsError] = useState(false)
+  // Whether this player can actually change dub. Over HLS that means the master
+  // playlist carried more than one audio rendition; for native playback it means
+  // the element exposes audioTracks, which Chrome and Firefox do not. Without the
+  // check the menu would change its own label and leave the sound untouched.
+  const [audioSwitchable, setAudioSwitchable] = useState(false)
 
   const selectedAudio = room?.selectedAudio ?? 0
   const selectedSubs = room?.selectedSubs ?? 'off'
@@ -75,6 +80,18 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
             setHlsError(true)
           }
         })
+        // Renditions are not on the instance yet when the master playlist parses —
+        // AUDIO_TRACKS_UPDATED is the event that actually carries them — so the
+        // room's chosen dub is applied from both, whichever lands first.
+        const syncAudioTracks = () => {
+          const tracks = hls.audioTracks ?? []
+          if (tracks.length === 0) return
+          setAudioSwitchable(tracks.length > 1)
+          const want = useStore.getState().room?.selectedAudio ?? 0
+          if (tracks.length > want && hls.audioTrack !== want) hls.audioTrack = want
+        }
+        hls.on(Hls.Events.MANIFEST_PARSED, syncAudioTracks)
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, syncAudioTracks)
         hlsRef.current = hls
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Safari native HLS
@@ -228,27 +245,29 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0
 
-  // Apply audio track selection via the native audioTracks API (Chrome/Safari).
-  // Must be called both after metadata loads (tracks become available) and
-  // whenever the selected index changes. Without the metadata call, all tracks
-  // start enabled simultaneously and the effect runs before tracks are ready.
+  // Switch dub. Over HLS the server publishes one EXT-X-MEDIA rendition per
+  // audio stream, and hls.js swaps them without refetching video. The element's
+  // own audioTracks API is the fallback for native playback (progressive MP4, and
+  // Safari's built-in HLS); Chrome and Firefox do not implement it, which is why
+  // it cannot be the only path.
   const applyAudioTrack = useCallback((index: number) => {
+    const hls = hlsRef.current
+    if (hls) {
+      if (hls.audioTracks.length > index) hls.audioTrack = index
+      return
+    }
     const video = videoRef.current
     if (!video) return
-    if (isHls) return // HLS audio tracks are managed via EXT-X-MEDIA renditions (future work)
     const tracks = (video as any).audioTracks
     if (!tracks || tracks.length === 0) return
     for (let i = 0; i < tracks.length; i++) {
       tracks[i].enabled = (i === index)
     }
-    // Force decoder flush so the new audio track takes effect immediately
-    // (Chrome buffers the old track; a seek to the same position re-decodes)
-    video.currentTime = video.currentTime
   }, [])
 
   useEffect(() => {
     applyAudioTrack(selectedAudio)
-  }, [selectedAudio, applyAudioTrack])
+  }, [selectedAudio, applyAudioTrack, audioSwitchable])
 
   return (
     <div
@@ -281,9 +300,13 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           if (serverTime > 0 && videoRef.current) {
             videoRef.current.currentTime = serverTime
           }
-          // Initialize audio tracks — disable all except the selected one.
-          // Without this, Chrome plays all tracks at once when multiple exist.
-          applyAudioTrack(selectedAudio)
+          // Native playback only: leave exactly the selected track enabled, or
+          // browsers that do expose audioTracks play all of them at once.
+          if (!isHls) {
+            const native = (videoRef.current as any)?.audioTracks
+            setAudioSwitchable(!!native && native.length > 1)
+            applyAudioTrack(selectedAudio)
+          }
         }}
         onEnded={() => onEnded?.()}
         onClick={handlePlayPause}
@@ -419,13 +442,15 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           {/* Audio */}
           <div className="relative">
             <button
-              onClick={() => { if (isLeader) { setAudioMenuOpen(!audioMenuOpen); setSubsMenuOpen(false); setQualityMenuOpen(false) } }}
-              className={`flex items-center gap-1 text-xs ${isLeader ? 'text-white/70 hover:text-white' : 'text-white/30 cursor-not-allowed'} transition-colors`}
+              onClick={() => { if (isLeader && audioSwitchable) { setAudioMenuOpen(!audioMenuOpen); setSubsMenuOpen(false); setQualityMenuOpen(false) } }}
+              disabled={!isLeader || !audioSwitchable}
+              title={!audioSwitchable ? 'Смена озвучки недоступна для этого файла в вашем браузере' : undefined}
+              className={`flex items-center gap-1 text-xs ${isLeader && audioSwitchable ? 'text-white/70 hover:text-white' : 'text-white/30 cursor-not-allowed'} transition-colors`}
             >
               <Headphones size={15} />
               <span className="hidden sm:inline">{media.audio[selectedAudio]?.label ?? 'Audio'}</span>
             </button>
-            {audioMenuOpen && isLeader && (
+            {audioMenuOpen && isLeader && audioSwitchable && (
               <div className="menu-dropdown absolute bottom-8 right-0 min-w-40">
                 {media.audio.map(a => (
                   <div
