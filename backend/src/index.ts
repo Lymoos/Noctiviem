@@ -75,59 +75,120 @@ const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis']);
 // Files become available immediately after download — no waiting for conversion.
 const HLS_SEG_SECS = 10;
 
+// How many segments beyond the requested one to warm up, so the player is not
+// waiting on ffmpeg at every 10-second boundary.
+const HLS_PREWARM = 3;
+// Cap on ffmpeg processes running at once. Each one opens a multi-GB source,
+// seeks, and re-encodes audio, so it is heavy on both CPU and disk; past a
+// handful they only slow each other down.
+const HLS_MAX_PARALLEL_FFMPEG = 3;
+// Cap on cached segments. Each holds a whole segment (10-25 MB for 1080p) in the
+// Node heap, so an unbounded cache is an out-of-memory crash on a long film.
+const HLS_CACHE_MAX = 24;
+
 // Promise cache: key = `${mediaId}:${segIdx}` → Buffer promise.
 // Concurrent requests for the same segment (watch-party clients in sync) share
 // one ffmpeg invocation. Entries expire 2 minutes after generation.
 const hlsSegCache = new Map<string, Promise<Buffer>>();
 
-function getHlsSegment(filePath: string, mediaId: string, idx: number, hasAudio = true, totalSegs?: number): Promise<Buffer> {
-  const key = `${mediaId}:${idx}`;
-  if (hlsSegCache.has(key)) return hlsSegCache.get(key)!;
+// FIFO gate over ffmpeg starts. Callers await a slot and release it when done.
+let ffmpegRunning = 0;
+const ffmpegWaiting: (() => void)[] = [];
 
-  // Pre-warm next 3 segments so they are ready before the player needs them.
-  // This eliminates the visible stall at every 10-second segment boundary.
-  for (let ahead = 1; ahead <= 3; ahead++) {
-    const nextIdx = idx + ahead;
-    if (totalSegs !== undefined && nextIdx >= totalSegs) break;
-    const nextKey = `${mediaId}:${nextIdx}`;
-    if (!hlsSegCache.has(nextKey)) {
-      getHlsSegment(filePath, mediaId, nextIdx, hasAudio, totalSegs).catch(() => {});
+function acquireFfmpegSlot(): Promise<() => void> {
+  return new Promise(resolve => {
+    const grant = () => {
+      ffmpegRunning++;
+      let released = false;
+      resolve(() => {
+        if (released) return;       // release() must be idempotent
+        released = true;
+        ffmpegRunning--;
+        ffmpegWaiting.shift()?.();
+      });
+    };
+    if (ffmpegRunning < HLS_MAX_PARALLEL_FFMPEG) grant();
+    else ffmpegWaiting.push(grant);
+  });
+}
+
+/** Drop the oldest entries once the cache outgrows its budget (Map keeps insertion order). */
+function evictHlsCache() {
+  while (hlsSegCache.size > HLS_CACHE_MAX) {
+    const oldest = hlsSegCache.keys().next().value;
+    if (oldest === undefined) break;
+    hlsSegCache.delete(oldest);
+  }
+}
+
+/** Cut one segment with ffmpeg. Goes through the concurrency gate; never call directly. */
+async function renderHlsSegment(filePath: string, idx: number, hasAudio: boolean): Promise<Buffer> {
+  const release = await acquireFfmpegSlot();
+  try {
+    return await new Promise<Buffer>((resolve, reject) => {
+      const audioArgs = hasAudio
+        ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
+        : [];
+      const proc = spawn('ffmpeg', [
+        '-ss', String(idx * HLS_SEG_SECS),
+        '-i', filePath,
+        '-t', String(HLS_SEG_SECS),
+        '-map', '0:v:0',
+        ...audioArgs,
+        '-c:v', 'copy',
+        '-avoid_negative_ts', 'make_zero',
+        '-reset_timestamps', '1',
+        '-max_muxing_queue_size', '1024',
+        '-f', 'mpegts',
+        'pipe:1',
+      ], { stdio: ['ignore', 'pipe', 'inherit'] });
+
+      const chunks: Buffer[] = [];
+      proc.stdout!.on('data', (c: Buffer) => chunks.push(c));
+      proc.on('close', code => {
+        if (code === 0) resolve(Buffer.concat(chunks));
+        else reject(new Error(`ffmpeg segment ${idx} exited ${code}`));
+      });
+      proc.on('error', reject);
+    });
+  } finally {
+    release();
+  }
+}
+
+function getHlsSegment(
+  filePath: string, mediaId: string, idx: number,
+  hasAudio = true, totalSegs?: number, prewarm = true,
+): Promise<Buffer> {
+  const key = `${mediaId}:${idx}`;
+  const cached = hlsSegCache.get(key);
+  if (cached) return cached;
+
+  const p = renderHlsSegment(filePath, idx, hasAudio);
+
+  // Cache BEFORE pre-warming. The pre-warm calls below re-enter this function,
+  // and if this entry were not already in place they would all miss, recurse
+  // into their own neighbours, and walk the entire playlist — one ffmpeg per
+  // segment of the whole film from a single request.
+  hlsSegCache.set(key, p);
+  evictHlsCache();
+
+  // Only drop the entry if it is still this promise: an evicted-then-re-requested
+  // segment gets a fresh entry, and the old timer must not take it out.
+  const dropIfCurrent = () => { if (hlsSegCache.get(key) === p) hlsSegCache.delete(key); };
+  p.then(() => setTimeout(dropIfCurrent, 180_000))
+   .catch(dropIfCurrent);
+
+  if (prewarm) {
+    for (let ahead = 1; ahead <= HLS_PREWARM; ahead++) {
+      const nextIdx = idx + ahead;
+      if (totalSegs !== undefined && nextIdx >= totalSegs) break;
+      // prewarm: false — neighbours must not warm their own neighbours, or the
+      // chain runs to the end of the film regardless of the caching above.
+      getHlsSegment(filePath, mediaId, nextIdx, hasAudio, totalSegs, false).catch(() => {});
     }
   }
 
-  const startTime = idx * HLS_SEG_SECS;
-
-  const p = new Promise<Buffer>((resolve, reject) => {
-    const audioArgs = hasAudio
-      ? ['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k', '-ac', '2']
-      : [];
-    const proc = spawn('ffmpeg', [
-      '-ss', String(startTime),
-      '-i', filePath,
-      '-t', String(HLS_SEG_SECS),
-      '-map', '0:v:0',
-      ...audioArgs,
-      '-c:v', 'copy',
-      '-avoid_negative_ts', 'make_zero',
-      '-reset_timestamps', '1',
-      '-max_muxing_queue_size', '1024',
-      '-f', 'mpegts',
-      'pipe:1',
-    ], { stdio: ['ignore', 'pipe', 'inherit'] });
-
-    const chunks: Buffer[] = [];
-    proc.stdout!.on('data', (c: Buffer) => chunks.push(c));
-    proc.on('close', code => {
-      if (code === 0) resolve(Buffer.concat(chunks));
-      else reject(new Error(`ffmpeg segment ${idx} exited ${code}`));
-    });
-    proc.on('error', reject);
-  });
-
-  p.then(() => setTimeout(() => hlsSegCache.delete(key), 180_000))
-   .catch(() => hlsSegCache.delete(key));
-
-  hlsSegCache.set(key, p);
   return p;
 }
 
@@ -1097,7 +1158,30 @@ io.on('connection', socket => {
 
   console.log(`[+] ${nickname} (${socket.id})`);
 
-  socket.on('room:create', async (data: { name: string; mediaId: string; maxParticipants?: number; password?: string; friendsOnly?: boolean }, cb) => {
+  // Every payload below comes straight off the wire and may be anything at all —
+  // null, a string, a hostile shape. Socket.io does not catch throws inside a
+  // handler, so one unguarded `data.foo` on a null payload takes down the whole
+  // process, and with it every in-memory room on the server. Registering through
+  // `on` keeps a bad message local: the sender gets an error, everyone else keeps
+  // watching.
+  function on(event: string, handler: (...args: any[]) => unknown) {
+    socket.on(event, (...args: unknown[]) => {
+      const last = args[args.length - 1];
+      const ack = typeof last === 'function' ? last as (r: unknown) => void : undefined;
+      const fail = (err: unknown) => {
+        console.error(`[socket] ${event} from ${socket.data.nickname}:`, err instanceof Error ? err.message : err);
+        try { ack?.({ error: 'Invalid request' }); } catch { /* client already gone */ }
+      };
+      try {
+        const r = handler(...args) as { then?: unknown; catch?: (f: (e: unknown) => void) => void };
+        if (r && typeof r.then === 'function' && typeof r.catch === 'function') r.catch(fail);
+      } catch (e) {
+        fail(e);
+      }
+    });
+  }
+
+  on('room:create', async (data: { name: string; mediaId: string; maxParticipants?: number; password?: string; friendsOnly?: boolean }, cb) => {
     const media = mediaLibrary.find(m => m.id === data.mediaId);
     if (!media) { cb({ error: 'Media not found' }); return; }
     if (media.status !== 'ready') { cb({ error: 'Media is not ready' }); return; }
@@ -1119,7 +1203,7 @@ io.on('connection', socket => {
     cb({ room, media, userId: socket.data.userId });
   });
 
-  socket.on('room:join', async (data: { roomId: string; password?: string }, cb) => {
+  on('room:join', async (data: { roomId: string; password?: string }, cb) => {
     // Cancel any pending reconnect grace timer for this user (leader or participant)
     const graceKey = `${socket.data.userId}:${data.roomId}`;
     if (leaderGraceTimers.has(graceKey)) {
@@ -1174,17 +1258,17 @@ io.on('connection', socket => {
     }
   });
 
-  socket.on('room:leave', () => doLeave(socket.data.roomId, socket.data.userId, socket));
+  on('room:leave', () => doLeave(socket.data.roomId, socket.data.userId, socket));
 
-  socket.on('room:play',  (d: { currentTime: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { isPlaying: true,  currentTime: d.currentTime }); io.to(socket.data.roomId!).emit('room:sync', { isPlaying: true,  currentTime: d.currentTime, updatedAt: Date.now() }); });
-  socket.on('room:pause', (d: { currentTime: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { isPlaying: false, currentTime: d.currentTime }); io.to(socket.data.roomId!).emit('room:sync', { isPlaying: false, currentTime: d.currentTime, updatedAt: Date.now() }); });
-  socket.on('room:seek',  (d: { currentTime: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { currentTime: d.currentTime }); io.to(socket.data.roomId!).emit('room:sync', { currentTime: d.currentTime, updatedAt: Date.now() }); });
-  socket.on('room:audio',   (d: { audioIndex: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { selectedAudio: d.audioIndex }); io.to(socket.data.roomId!).emit('room:audio', d); });
-  socket.on('room:subs',    (d: { subsId: string })     => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { selectedSubs: d.subsId }); io.to(socket.data.roomId!).emit('room:subs', d); });
-  socket.on('room:quality', (d: { quality: string })    => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { selectedQuality: d.quality }); io.to(socket.data.roomId!).emit('room:quality', d); });
-  socket.on('room:heartbeat', (d: { currentTime: number; isPlaying: boolean }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, d); socket.to(socket.data.roomId!).emit('room:heartbeat', { ...d, updatedAt: Date.now() }); });
+  on('room:play',  (d: { currentTime: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { isPlaying: true,  currentTime: d.currentTime }); io.to(socket.data.roomId!).emit('room:sync', { isPlaying: true,  currentTime: d.currentTime, updatedAt: Date.now() }); });
+  on('room:pause', (d: { currentTime: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { isPlaying: false, currentTime: d.currentTime }); io.to(socket.data.roomId!).emit('room:sync', { isPlaying: false, currentTime: d.currentTime, updatedAt: Date.now() }); });
+  on('room:seek',  (d: { currentTime: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { currentTime: d.currentTime }); io.to(socket.data.roomId!).emit('room:sync', { currentTime: d.currentTime, updatedAt: Date.now() }); });
+  on('room:audio',   (d: { audioIndex: number }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { selectedAudio: d.audioIndex }); io.to(socket.data.roomId!).emit('room:audio', d); });
+  on('room:subs',    (d: { subsId: string })     => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { selectedSubs: d.subsId }); io.to(socket.data.roomId!).emit('room:subs', d); });
+  on('room:quality', (d: { quality: string })    => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, { selectedQuality: d.quality }); io.to(socket.data.roomId!).emit('room:quality', d); });
+  on('room:heartbeat', (d: { currentTime: number; isPlaying: boolean }) => { if (!isLeader()) return; rm.updateRoomPlayback(socket.data.roomId!, d); socket.to(socket.data.roomId!).emit('room:heartbeat', { ...d, updatedAt: Date.now() }); });
 
-  socket.on('room:message', (d: { text: string }, cb?: (r: unknown) => void) => {
+  on('room:message', (d: { text: string }, cb?: (r: unknown) => void) => {
     const rid = socket.data.roomId; if (!rid) return;
     const room = rm.getRoomById(rid); if (!room) return;
     if (!room.chatEnabled && room.leaderId !== socket.data.userId) return;
@@ -1192,7 +1276,7 @@ io.on('connection', socket => {
     if (msg) { io.to(rid).emit('room:message', msg); cb?.({ success: true }); }
   });
 
-  socket.on('room:whisper', (d: { targetUserId: string; text: string }) => {
+  on('room:whisper', (d: { targetUserId: string; text: string }) => {
     const rid = socket.data.roomId; if (!rid) return;
     const room = rm.getRoomById(rid); if (!room) return;
     const target = room.participants.find(p => p.id === d.targetUserId); if (!target) return;
@@ -1200,20 +1284,20 @@ io.on('connection', socket => {
     if (msg) { socket.emit('room:message', msg); io.sockets.sockets.get(target.socketId)?.emit('room:message', msg); }
   });
 
-  socket.on('room:delete_message', (d: { messageId: string }) => {
+  on('room:delete_message', (d: { messageId: string }) => {
     const rid = socket.data.roomId; if (!rid || !isLeader()) return;
     rm.deleteMessage(rid, d.messageId);
     io.to(rid).emit('room:message_deleted', { messageId: d.messageId });
   });
 
-  socket.on('room:reaction', (d: { emoji: string; currentTime: number }) => {
+  on('room:reaction', (d: { emoji: string; currentTime: number }) => {
     const rid = socket.data.roomId; if (!rid) return;
     const room = rm.getRoomById(rid); if (!room || !room.reactionsEnabled) return;
     const r = rm.addReaction(rid, { userId: socket.data.userId, nickname: socket.data.nickname, emoji: d.emoji, timestamp: Date.now(), timelinePosition: d.currentTime });
     if (r) io.to(rid).emit('room:reaction', r);
   });
 
-  socket.on('room:kick', (d: { targetUserId: string }) => {
+  on('room:kick', (d: { targetUserId: string }) => {
     const rid = socket.data.roomId; if (!rid || !isLeader()) return;
     const room = rm.getRoomById(rid); if (!room) return;
     const target = room.participants.find(p => p.id === d.targetUserId); if (!target || target.isLeader) return;
@@ -1223,11 +1307,11 @@ io.on('connection', socket => {
     if (updated) io.to(rid).emit('room:participant_leave', { userId: d.targetUserId, participants: updated.participants, newLeaderId: updated.leaderId });
   });
 
-  socket.on('room:chat_toggle',      (d: { enabled: boolean }) => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { chatEnabled: d.enabled });      io.to(socket.data.roomId!).emit('room:settings_update', { chatEnabled: d.enabled }); });
-  socket.on('room:reactions_toggle', (d: { enabled: boolean }) => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { reactionsEnabled: d.enabled }); io.to(socket.data.roomId!).emit('room:settings_update', { reactionsEnabled: d.enabled }); });
-  socket.on('room:lock',             (d: { locked: boolean })  => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { isLocked: d.locked });           io.to(socket.data.roomId!).emit('room:settings_update', { isLocked: d.locked }); });
+  on('room:chat_toggle',      (d: { enabled: boolean }) => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { chatEnabled: d.enabled });      io.to(socket.data.roomId!).emit('room:settings_update', { chatEnabled: d.enabled }); });
+  on('room:reactions_toggle', (d: { enabled: boolean }) => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { reactionsEnabled: d.enabled }); io.to(socket.data.roomId!).emit('room:settings_update', { reactionsEnabled: d.enabled }); });
+  on('room:lock',             (d: { locked: boolean })  => { if (!isLeader()) return; rm.updateRoomSettings(socket.data.roomId!, { isLocked: d.locked });           io.to(socket.data.roomId!).emit('room:settings_update', { isLocked: d.locked }); });
 
-  socket.on('room:transfer_leader', (d: { targetUserId: string }) => {
+  on('room:transfer_leader', (d: { targetUserId: string }) => {
     const rid = socket.data.roomId;
     if (!rid || !isLeader()) return;
     const updated = rm.transferLeader(rid, socket.data.userId, d.targetUserId);
@@ -1236,7 +1320,7 @@ io.on('connection', socket => {
   });
 
   // ── Film queue ───────────────────────────────────────────────────────────────
-  socket.on('room:queue_media', (d: { mediaId: string | null }, cb?: (r: unknown) => void) => {
+  on('room:queue_media', (d: { mediaId: string | null }, cb?: (r: unknown) => void) => {
     const rid = socket.data.roomId;
     if (!rid || !isLeader()) { cb?.({ error: 'Not leader' }); return; }
     let mediaId: string | null = null;
@@ -1257,7 +1341,7 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  socket.on('room:play_next', (cb?: (r: unknown) => void) => {
+  on('room:play_next', (cb?: (r: unknown) => void) => {
     const rid = socket.data.roomId;
     if (!rid || !isLeader()) { cb?.({ error: 'Not leader' }); return; }
     const room = rm.getRoomById(rid);
@@ -1270,7 +1354,7 @@ io.on('connection', socket => {
     cb?.({ success: true });
   });
 
-  socket.on('disconnect', () => {
+  on('disconnect', () => {
     console.log(`[-] ${socket.data.nickname} (${socket.id})`);
     const roomId = socket.data.roomId;
     const userId = socket.data.userId;
@@ -1406,6 +1490,18 @@ async function repairMediaLibrary() {
     console.log(`[repair] fixed "${item.title}" → ${newUrl}`);
   }
 }
+
+// ── Crash safety net ──────────────────────────────────────────────────────────
+// Socket handlers catch their own errors (see `on` above), but rooms live only in
+// memory: losing the process drops every active watch party. Anything that still
+// slips through gets logged loudly and the server stays up rather than taking the
+// halls down with it.
+process.on('uncaughtException', err => {
+  console.error('[fatal] uncaught exception — server kept alive:', err);
+});
+process.on('unhandledRejection', reason => {
+  console.error('[fatal] unhandled rejection — server kept alive:', reason);
+});
 
 // ── Startup (async to wait for DB) ────────────────────────────────────────────
 async function main() {
