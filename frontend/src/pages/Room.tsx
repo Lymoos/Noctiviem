@@ -10,6 +10,7 @@ import CinemaHall from '../components/CinemaHall'
 import Chat from '../components/Chat'
 import LeaderPanel from '../components/LeaderPanel'
 import { useStore, selectIsLeader } from '../store'
+import { translations } from '../i18n'
 import { socket, connectSocket, getLocalUserId } from '../socket'
 import { RoomState, MediaItem, Message, Reaction, User, FloatingReaction } from '../types'
 import { SkipForward } from 'lucide-react'
@@ -28,6 +29,7 @@ export default function Room() {
   } = useStore()
 
   const isLeader = useStore(selectIsLeader)
+  const t = translations[useStore(s => s.lang)]
   const userId = getLocalUserId()
 
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting')
@@ -226,10 +228,10 @@ export default function Room() {
       <div className="min-h-screen bg-cinema-bg flex items-center justify-center">
         <div className="text-center">
           <div className="text-6xl mb-4">🚫</div>
-          <h1 className="text-2xl font-bold text-cinema-text mb-2">You've been removed</h1>
-          <p className="text-cinema-muted">The Leader removed you from the hall.</p>
+          <h1 className="text-2xl font-bold text-cinema-text mb-2">{t.removedTitle}</h1>
+          <p className="text-cinema-muted">{t.removedBody}</p>
           <button onClick={() => navigate('/')} className="btn-primary mt-6">
-            Back to Dashboard
+            {t.backToDashboard}
           </button>
         </div>
       </div>
@@ -242,10 +244,10 @@ export default function Room() {
       <div className="min-h-screen bg-cinema-bg flex items-center justify-center p-4">
         <div className="text-center max-w-sm">
           <div className="text-5xl mb-4">🎬</div>
-          <h1 className="text-xl font-bold text-cinema-text mb-2">Cannot enter hall</h1>
+          <h1 className="text-xl font-bold text-cinema-text mb-2">{t.cannotEnterHall}</h1>
           <p className="text-cinema-muted text-sm mb-6">{joinError}</p>
           <button onClick={() => navigate('/')} className="btn-primary">
-            Back to Dashboard
+            {t.backToDashboard}
           </button>
         </div>
       </div>
@@ -258,7 +260,7 @@ export default function Room() {
       <div className="min-h-screen bg-cinema-bg flex items-center justify-center">
         <div className="text-center">
           <div className="w-16 h-16 border-2 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-cinema-muted">Entering the hall…</p>
+          <p className="text-cinema-muted">{t.enteringHall}</p>
         </div>
       </div>
     )
@@ -297,12 +299,12 @@ export default function Room() {
           {connectionStatus === 'connected' ? (
             <>
               <div className="sync-dot" />
-              <span className="text-xs text-slate-500 hidden sm:inline">Sync</span>
+              <span className="text-xs text-slate-500 hidden sm:inline">{t.syncOk}</span>
             </>
           ) : (
             <>
               <WifiOff size={12} className="text-red-400" />
-              <span className="text-xs text-red-400 hidden sm:inline">Lost</span>
+              <span className="text-xs text-red-400 hidden sm:inline">{t.syncLost}</span>
             </>
           )}
         </div>
@@ -320,7 +322,7 @@ export default function Room() {
           className="invite-badge flex items-center gap-1.5 text-xs flex-shrink-0"
         >
           {copied ? <CheckCheck size={12} /> : <Share2 size={12} />}
-          <span>{copied ? 'Copied!' : 'Invite'}</span>
+          <span>{copied ? t.copied : t.invite}</span>
           <span className="hidden sm:inline text-white/40">· {room.inviteCode}</span>
         </button>
 
@@ -390,7 +392,7 @@ export default function Room() {
                   />
                 )}
                 <div className="min-w-0">
-                  <p className="text-[10px] text-slate-500 leading-none mb-0.5">Up next</p>
+                  <p className="text-[10px] text-slate-500 leading-none mb-0.5">{t.upNext}</p>
                   <p className="text-xs font-medium text-cinema-text truncate max-w-[140px]">{room.queuedMediaTitle}</p>
                 </div>
                 {isLeader && (
@@ -399,7 +401,7 @@ export default function Room() {
                     className="flex items-center gap-1 text-xs text-green-400 hover:text-green-300 transition-colors flex-shrink-0 ml-1"
                   >
                     <SkipForward size={14} />
-                    <span className="hidden sm:inline">Play now</span>
+                    <span className="hidden sm:inline">{t.playNow}</span>
                   </button>
                 )}
               </div>
@@ -420,8 +422,11 @@ export default function Room() {
         /* ── CINEMA MODE: video + seats + optional chat overlay ── */
         <div className="flex-1 flex min-h-0 overflow-hidden">
 
-          {/* Left: Cinema stage */}
-          <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden cinema-room-stage">
+          {/* Left: Cinema stage. The chat below is fixed-position, so on wide
+              screens the stage has to reserve its width — otherwise the panel
+              lies on top of the player's right-hand controls and the fullscreen
+              button cannot be clicked at all. */}
+          <div className={`flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden cinema-room-stage ${chatOpen ? 'sm:pr-80' : ''}`}>
 
             {/* ── Screen section ── */}
             <div className="flex-shrink-0 flex justify-center relative cinema-screen-enter px-0 pt-5">
@@ -450,7 +455,7 @@ export default function Room() {
                     />
                   )}
                   <div className="min-w-0">
-                    <p className="text-[10px] text-slate-500 leading-none mb-0.5">Up next</p>
+                    <p className="text-[10px] text-slate-500 leading-none mb-0.5">{t.upNext}</p>
                     <p className="text-xs font-medium text-cinema-text truncate max-w-[140px]">{room.queuedMediaTitle}</p>
                   </div>
                   {isLeader && (
@@ -460,7 +465,7 @@ export default function Room() {
                       title="Switch to queued film now"
                     >
                       <SkipForward size={14} />
-                      <span className="hidden sm:inline">Play now</span>
+                      <span className="hidden sm:inline">{t.playNow}</span>
                     </button>
                   )}
                 </div>

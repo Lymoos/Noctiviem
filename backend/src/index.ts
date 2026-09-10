@@ -69,6 +69,13 @@ function ffmpegSpawn(
 // Audio codecs natively supported by all major browsers inside MP4/WebM
 const BROWSER_SAFE_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis']);
 
+// Subtitle codecs that carry text and can therefore be converted to WebVTT.
+// Anything else in a rip is a picture (PGS, VOBSUB, DVB) and has no text to give.
+const TEXT_SUBTITLE_CODECS = new Set([
+  'subrip', 'srt', 'ass', 'ssa', 'mov_text', 'webvtt', 'text', 'subviewer',
+  'subviewer1', 'microdvd', 'sami', 'stl', 'jacosub', 'realtext', 'vplayer', 'pjs',
+]);
+
 // ─── HLS on-demand ────────────────────────────────────────────────────────────
 // Instead of copying the entire file to a new MP4 (can take 1.5h for 25GB),
 // we generate MPEG-TS segments on-demand using ffmpeg stream copy.
@@ -369,6 +376,55 @@ async function buildAudioArgs(inputPath: string): Promise<string[]> {
   }
 }
 
+/**
+ * Args that carry subtitles and per-track names through a remux into MP4.
+ *
+ * Without these, remuxing throws away everything except picture and sound: the
+ * subtitle streams vanish (and the source file is deleted afterwards, so they are
+ * gone for good), and MKV track titles are replaced by MP4's generic
+ * "SoundHandler", leaving the dub menu a list of identical labels.
+ *
+ * Only text subtitles are mapped — mov_text is a text format, so a picture-based
+ * track (PGS, VOBSUB) would abort the whole remux.
+ */
+async function buildCarryOverArgs(inputPath: string): Promise<string[]> {
+  try {
+    // No -select_streams here: it takes a single specifier, and "a,s" silently
+    // matches nothing. Filtering happens below instead.
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'quiet',
+      '-show_entries', 'stream=index,codec_type,codec_name:stream_tags=language,title',
+      '-of', 'json',
+      inputPath,
+    ], { timeout: 20000 });
+    const streams: any[] = JSON.parse(stdout).streams ?? [];
+    const args: string[] = [];
+
+    streams.filter(s => s.codec_type === 'audio').forEach((s, i) => {
+      const lang = s.tags?.language;
+      const title = s.tags?.title;
+      if (lang) args.push(`-metadata:s:a:${i}`, `language=${lang}`);
+      if (title) args.push(`-metadata:s:a:${i}`, `title=${title}`, `-metadata:s:a:${i}`, `handler_name=${title}`);
+    });
+
+    const textSubs = streams.filter(
+      s => s.codec_type === 'subtitle' && TEXT_SUBTITLE_CODECS.has((s.codec_name ?? '').toLowerCase()),
+    );
+    textSubs.forEach((s, i) => {
+      args.push('-map', `0:${s.index}`);
+      const lang = s.tags?.language;
+      const title = s.tags?.title;
+      if (lang) args.push(`-metadata:s:s:${i}`, `language=${lang}`);
+      if (title) args.push(`-metadata:s:s:${i}`, `title=${title}`, `-metadata:s:s:${i}`, `handler_name=${title}`);
+    });
+    if (textSubs.length > 0) args.push('-c:s', 'mov_text');
+
+    return args;
+  } catch {
+    return [];
+  }
+}
+
 /** Returns the primary video codec name ('hevc', 'h264', etc.) from ffprobe. */
 async function getVideoCodec(filePath: string): Promise<string> {
   try {
@@ -395,7 +451,9 @@ async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void
   const outputPath = inputPath.slice(0, -ext.length) + '.mp4';
   if (fs.existsSync(outputPath)) return outputPath;
   console.log(`[remux] ${path.basename(inputPath)} → mp4`);
-  const [audioArgs, videoCodec] = await Promise.all([buildAudioArgs(inputPath), getVideoCodec(inputPath)]);
+  const [audioArgs, carryOver, videoCodec] = await Promise.all([
+    buildAudioArgs(inputPath), buildCarryOverArgs(inputPath), getVideoCodec(inputPath),
+  ]);
   const isHevc = videoCodec === 'hevc';
   await ffmpegSpawn([
     '-i', inputPath,
@@ -404,8 +462,8 @@ async function remuxToMp4(inputPath: string, onProgress?: (secs: number) => void
     '-c:v', 'copy',           // copy video — no re-encode
     ...(isHevc ? ['-tag:v', 'hvc1'] : []),  // Chrome requires hvc1 tag for HEVC in MP4
     ...audioArgs,             // per-stream: copy if already browser-safe, else → aac
+    ...carryOver,             // text subtitles + track names, which MP4 loses otherwise
     '-map_metadata', '0',
-    '-map_metadata:s', '0:s',
     // No +faststart: on 40GB+ files that's 3× disk I/O. Range requests handle moov-at-end.
     outputPath,
   ], { timeout: 3 * 60 * 60 * 1000, onProgress });
@@ -473,7 +531,9 @@ async function backgroundRemux(mediaId: string, inputPath: string, title: string
   };
 
   try {
-    const [audioArgs, videoCodec] = await Promise.all([buildAudioArgs(inputPath), getVideoCodec(inputPath)]);
+    const [audioArgs, carryOver, videoCodec] = await Promise.all([
+      buildAudioArgs(inputPath), buildCarryOverArgs(inputPath), getVideoCodec(inputPath),
+    ]);
     const isHevc = videoCodec === 'hevc';
 
     await ffmpegSpawn([
@@ -483,6 +543,7 @@ async function backgroundRemux(mediaId: string, inputPath: string, title: string
       '-c:v', 'copy',
       ...(isHevc ? ['-tag:v', 'hvc1'] : []),
       ...audioArgs,
+      ...carryOver,             // text subtitles + track names, which MP4 loses otherwise
       '-map_metadata', '0',
       '-movflags', '+faststart',  // moov atom at beginning → instant browser seeking
       outputPath,
@@ -639,14 +700,24 @@ async function probeVideoFile(filePath: string): Promise<{
         })
       : fallback.audio;
 
+    // Only text subtitles are offered: WebVTT is a text format, so image-based
+    // tracks (PGS on Blu-ray rips, VOBSUB on DVD ones) cannot be converted and
+    // would leave a menu entry that silently does nothing. The index kept here is
+    // the stream's position among ALL subtitle streams, which is what ffmpeg's
+    // 0:s:<n> selector counts.
     const subtitles: { id: string; label: string; lang: string }[] = [
       { id: 'off', label: 'Off', lang: 'off' },
-      ...subStreams.map((s, i) => {
-        const lang  = s.tags?.language ?? 'und';
-        const title = s.tags?.title;
-        const label = title ?? (lang !== 'und' ? lang.toUpperCase() : `Sub ${i + 1}`);
-        return { id: `sub_${i}`, label, lang };
-      }),
+      ...subStreams
+        .map((s, i) => ({ s, i }))
+        .filter(({ s }) => TEXT_SUBTITLE_CODECS.has((s.codec_name ?? '').toLowerCase()))
+        .map(({ s, i }) => {
+          const lang  = s.tags?.language ?? 'und';
+          // MP4 keeps a track's name in handler_name, MKV in title — check both,
+          // or a remuxed file falls back to a bare language code.
+          const title = s.tags?.title ?? s.tags?.handler_name;
+          const label = title ?? (lang !== 'und' ? lang.toUpperCase() : `Sub ${i + 1}`);
+          return { id: `sub_${i}`, label, lang };
+        }),
     ];
 
     return { duration, audio, subtitles };
@@ -921,6 +992,86 @@ app.get('/hls-mkv/:id/v/:idx.ts', (req, res) =>
 app.get('/hls-mkv/:id/a/:track/:idx.ts', (req, res) =>
   serveSegment(req, res, parseInt(req.params.idx), parseInt(req.params.track)));
 
+// ── Subtitles ────────────────────────────────────────────────────────────────
+// Embedded subtitle streams converted to WebVTT on demand, which is the only
+// subtitle format a <track> element understands.
+
+/** Where a media item's source file lives, whichever way it is being served. */
+function sourcePathForMedia(item: MediaItem): string | null {
+  let rel: string | null = null;
+  if (item.videoUrl.startsWith('/media/')) {
+    rel = item.videoUrl.slice('/media/'.length).split('/').map(decodeURIComponent).join('/');
+  } else {
+    // HLS entries carry the path in ?p= so it survives a server restart.
+    const q = item.videoUrl.indexOf('?');
+    if (q === -1) return null;
+    const p = new URLSearchParams(item.videoUrl.slice(q + 1)).get('p');
+    if (p) rel = decodeURIComponent(p);
+  }
+  if (!rel) return null;
+  const full = path.resolve(dl.DOWNLOADS_DIR, rel);
+  if (!full.startsWith(path.resolve(dl.DOWNLOADS_DIR) + path.sep)) return null;
+  return fs.existsSync(full) ? full : null;
+}
+
+// A whole film's subtitles are a few hundred KB of text, and extracting them
+// means demuxing the entire file, so the result is worth keeping.
+const subtitleCache = new Map<string, Promise<string>>();
+
+async function extractSubtitles(filePath: string, track: number): Promise<string> {
+  const release = await acquireFfmpegSlot();
+  try {
+    return await new Promise<string>((resolve, reject) => {
+      const proc = spawn('ffmpeg', [
+        '-i', filePath,
+        '-map', `0:s:${track}`,
+        '-vn', '-an',          // subtitles only — no point demuxing pictures or sound
+        '-c:s', 'webvtt',
+        '-f', 'webvtt',
+        'pipe:1',
+      ], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      proc.stdout!.setEncoding('utf8');
+      proc.stdout!.on('data', c => { out += c; });
+      proc.on('close', code => {
+        if (code === 0) resolve(out);
+        else reject(new Error(`ffmpeg subtitle track ${track} exited ${code}`));
+      });
+      proc.on('error', reject);
+    });
+  } finally {
+    release();
+  }
+}
+
+app.get('/subs/:id/:track.vtt', async (req: Request, res: Response) => {
+  const track = parseInt(req.params.track);
+  const item = mediaLibrary.find(m => m.id === req.params.id);
+  if (!item || isNaN(track)) { res.status(404).end(); return; }
+  // The menu ids are sub_<n>, and only tracks listed there can be converted.
+  if (!item.subtitles.some(s => s.id === `sub_${track}`)) { res.status(404).end(); return; }
+  const filePath = sourcePathForMedia(item);
+  if (!filePath) { res.status(404).end(); return; }
+
+  const key = `${item.id}:${track}`;
+  let p = subtitleCache.get(key);
+  if (!p) {
+    p = extractSubtitles(filePath, track);
+    subtitleCache.set(key, p);
+    p.catch(() => subtitleCache.delete(key));
+  }
+
+  try {
+    const vtt = await p;
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(vtt);
+  } catch (e: any) {
+    console.error(`[subs] ${item.id}:${track} — ${e.message}`);
+    if (!res.headersSent) res.status(500).end();
+  }
+});
+
 // ── Auth middleware ──────────────────────────────────────────────────────────
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   const h = req.headers.authorization;
@@ -1076,7 +1227,9 @@ app.post('/api/downloads', requireAuth, upload.single('torrent'), async (req, re
 });
 
 app.delete('/api/downloads/:id', requireAuth, async (req, res) => {
-  res.json({ success: await dl.remove(req.params.id) });
+  const removed = await dl.remove(req.params.id);
+  if (!removed) { res.status(404).json({ error: 'Download not found' }); return; }
+  res.json({ success: true });
 });
 
 app.patch('/api/downloads/reorder', requireAuth, (req, res) => {
@@ -1235,8 +1388,10 @@ app.get('/api/users/:id/profile', requireAuth, async (req, res) => {
 });
 
 app.post('/api/users/:id/friend', requireAuth, async (req, res) => {
+  if ((req as any).userId === req.params.id) { res.status(400).json({ error: 'Cannot add yourself' }); return; }
   const ok = await auth.addFriend((req as any).userId, req.params.id);
-  res.json({ success: ok });
+  if (!ok) { res.status(404).json({ error: 'User not found' }); return; }
+  res.json({ success: true });
 });
 
 app.delete('/api/users/:id/friend', requireAuth, async (req, res) => {

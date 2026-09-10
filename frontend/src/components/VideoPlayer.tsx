@@ -8,6 +8,7 @@ import {
 import { MediaItem, Reaction } from '../types'
 import { socket } from '../socket'
 import { useStore, selectIsLeader } from '../store'
+import { translations } from '../i18n'
 
 interface VideoPlayerProps {
   media: MediaItem
@@ -34,6 +35,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
 
   const isLeader = useStore(selectIsLeader)
   const room = useStore(s => s.room)
+  const t = translations[useStore(s => s.lang)]
 
   const [volume, setVolume] = useState(1)
   const [muted, setMuted] = useState(false)
@@ -269,6 +271,27 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
     applyAudioTrack(selectedAudio)
   }, [selectedAudio, applyAudioTrack, audioSwitchable])
 
+  // Everything except the "Off" entry; those are the tracks worth rendering.
+  const subtitleTracks = media.subtitles.filter(s => s.id !== 'off')
+
+  // Show exactly the chosen subtitle track and hide the rest. The <track>
+  // elements above deliberately carry no `default`, because the browser would
+  // then pick one on its own and fight the room's choice.
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const apply = () => {
+      const wanted = subtitleTracks.findIndex(s => s.id === selectedSubs)
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode = i === wanted ? 'showing' : 'disabled'
+      }
+    }
+    apply()
+    // Tracks arrive asynchronously, so re-apply when the list changes.
+    video.textTracks.addEventListener?.('addtrack', apply)
+    return () => video.textTracks.removeEventListener?.('addtrack', apply)
+  }, [selectedSubs, subtitleTracks.length, media.id])
+
   return (
     <div
       ref={containerRef}
@@ -310,20 +333,35 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
         }}
         onEnded={() => onEnded?.()}
         onClick={handlePlayPause}
-      />
+      >
+        {/* Embedded subtitle streams, converted to WebVTT by the server. Which one
+            shows is driven by textTracks below, not by `default`, so that the
+            room's choice wins even after the element reloads. */}
+        {subtitleTracks.map(s => (
+          <track
+            key={s.id}
+            kind="subtitles"
+            label={s.label}
+            srcLang={s.lang === 'und' ? undefined : s.lang}
+            src={`/subs/${media.id}/${s.id.replace('sub_', '')}.vtt`}
+          />
+        ))}
+      </video>
 
-      {/* Sync indicator */}
-      {/* HLS fatal error overlay */}
+      {/* HLS fatal error overlay. Stops short of the control bar rather than
+          covering it: at equal z-index the bar used to bury the retry button, and
+          simply stacking the overlay on top would make volume, fullscreen and the
+          rest unclickable instead. */}
       {hlsError && (
-        <div className="absolute inset-0 z-20 bg-black/85 flex flex-col items-center justify-center gap-3 px-6 text-center">
+        <div className="absolute inset-x-0 top-0 bottom-16 z-30 bg-black/85 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="text-4xl">⚠️</div>
-          <p className="text-sm font-semibold text-red-400">Ошибка воспроизведения</p>
-          <p className="text-xs text-slate-400">Не удалось загрузить видео.<br/>Файл может быть повреждён или формат не поддерживается.</p>
+          <p className="text-sm font-semibold text-red-400">{t.playbackError}</p>
+          <p className="text-xs text-slate-400">{t.playbackErrorHint}</p>
           <button
             onClick={() => { setHlsError(false); if (hlsRef.current) hlsRef.current.loadSource(media.videoUrl) }}
             className="mt-2 px-4 py-2 text-xs bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
           >
-            Попробовать снова
+            {t.tryAgain}
           </button>
         </div>
       )}
@@ -331,7 +369,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
       {isSyncing && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 glass px-3 py-1.5 rounded-full text-xs text-purple-300 flex items-center gap-2">
           <Gauge size={12} className="animate-spin" />
-          Syncing…
+          {t.syncing}
         </div>
       )}
 
@@ -348,7 +386,7 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           </div>
           {!isLeader && (
             <div className="absolute bottom-20 left-1/2 -translate-x-1/2 text-xs text-slate-400">
-              Waiting for Leader…
+              {t.waitingForLeader}
             </div>
           )}
         </div>
@@ -444,11 +482,11 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
             <button
               onClick={() => { if (isLeader && audioSwitchable) { setAudioMenuOpen(!audioMenuOpen); setSubsMenuOpen(false); setQualityMenuOpen(false) } }}
               disabled={!isLeader || !audioSwitchable}
-              title={!audioSwitchable ? 'Смена озвучки недоступна для этого файла в вашем браузере' : undefined}
+              title={!audioSwitchable ? t.audioSwitchUnavailable : undefined}
               className={`flex items-center gap-1 text-xs ${isLeader && audioSwitchable ? 'text-white/70 hover:text-white' : 'text-white/30 cursor-not-allowed'} transition-colors`}
             >
               <Headphones size={15} />
-              <span className="hidden sm:inline">{media.audio[selectedAudio]?.label ?? 'Audio'}</span>
+              <span className="hidden sm:inline">{media.audio[selectedAudio]?.label ?? t.audioLabel}</span>
             </button>
             {audioMenuOpen && isLeader && audioSwitchable && (
               <div className="menu-dropdown absolute bottom-8 right-0 min-w-40">
@@ -468,13 +506,15 @@ export default function VideoPlayer({ media, serverTime, isPlaying, onTimeUpdate
           {/* Subtitles */}
           <div className="relative">
             <button
-              onClick={() => { if (isLeader) { setSubsMenuOpen(!subsMenuOpen); setAudioMenuOpen(false); setQualityMenuOpen(false) } }}
-              className={`flex items-center gap-1 text-xs ${isLeader ? 'text-white/70 hover:text-white' : 'text-white/30 cursor-not-allowed'} transition-colors`}
+              onClick={() => { if (isLeader && subtitleTracks.length > 0) { setSubsMenuOpen(!subsMenuOpen); setAudioMenuOpen(false); setQualityMenuOpen(false) } }}
+              disabled={!isLeader || subtitleTracks.length === 0}
+              title={subtitleTracks.length === 0 ? t.noSubtitles : undefined}
+              className={`flex items-center gap-1 text-xs ${isLeader && subtitleTracks.length > 0 ? 'text-white/70 hover:text-white' : 'text-white/30 cursor-not-allowed'} transition-colors`}
             >
               <Subtitles size={15} />
-              <span className="hidden sm:inline">{selectedSubs === 'off' ? 'Off' : selectedSubs.toUpperCase()}</span>
+              <span className="hidden sm:inline">{selectedSubs === 'off' ? t.subsOff : (media.subtitles.find(x => x.id === selectedSubs)?.label ?? selectedSubs)}</span>
             </button>
-            {subsMenuOpen && isLeader && (
+            {subsMenuOpen && isLeader && subtitleTracks.length > 0 && (
               <div className="menu-dropdown absolute bottom-8 right-0 min-w-32">
                 {media.subtitles.map(s => (
                   <div
